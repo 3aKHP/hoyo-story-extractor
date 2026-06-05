@@ -77,17 +77,46 @@ class StarrailExtractor(BaseExtractor):
             raise FileNotFoundError(f"TalkSentenceConfig not found: {path}")
 
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            raw = json.load(f)
+
+        # TurnBasedGameData uses list format: [{"TalkSentenceID": int, ...}, ...]
+        if isinstance(raw, list):
+            return {str(item["TalkSentenceID"]): item for item in raw if "TalkSentenceID" in item}
+        # Fallback to dict format (if ever encountered)
+        return raw
 
     # ── Quests (missions) ────────────────────────────────────────────────
+
+    def _unhash_excel_item(self, info: dict, text_map: dict[str, str]) -> dict:
+        """将 ExcelOutput 字典中的 {"Hash": int} 替换为 TextMap 文本。
+
+        遍历 info 的所有字段，将 {"Hash": int64} 结构替换为 TextMap 中的对应文本。
+        保留其他字段不变。
+
+        Args:
+            info: 单个 ExcelOutput 条目（如 MainMission 中的一个 mission）。
+            text_map: 已加载的 TextMap 字典。
+
+        Returns:
+            替换后的字典副本。
+        """
+        result: dict = {}
+        for key, item in info.items():
+            if isinstance(item, dict) and "Hash" in item:
+                hash_val = item["Hash"]
+                txt = text_map.get(str(hash_val), "")
+                result[key] = txt if txt else item
+            else:
+                result[key] = item
+        return result
 
     def extract_quests(self, output_path: str | None = None) -> str:
         """从 ExcelOutput 提取任务层级（missions + submissions）。
 
         数据源：
-        - ExcelOutput/MainMission.json       → 主任务信息
-        - ExcelOutput/SubMission.json        → 子任务信息
-        - ExcelOutput/MissionChapterConfig.json → 章节名称
+        - ExcelOutput/MainMission.json       → 主任务信息（列表格式）
+        - ExcelOutput/SubMission.json        → 子任务信息（列表格式）
+        - ExcelOutput/MissionChapterConfig.json → 章节名称（列表格式）
         - Config/Level/Mission/*/MissionInfo_*.json → 任务-子任务层级
 
         Args:
@@ -101,64 +130,59 @@ class StarrailExtractor(BaseExtractor):
         text_map = self.load_text_map()
         repo = self.raw_repo_path
 
-        # ── 1. Chapter config (uses stable hash) ──────────────────────────
+        # ── 1. Chapter config (list format, uses stable hash on string values) ─
         chapter_map: dict[str, dict] = {}
         chapter_file = os.path.join(repo, "ExcelOutput", "MissionChapterConfig.json")
         if os.path.exists(chapter_file):
             with open(chapter_file, encoding="utf-8") as f:
                 raw_chapters = json.load(f)
-            for chapter_id, info in raw_chapters.items():
-                chapter_entry: dict[str, str] = {}
-                for key in ("ChapterName", "StageName", "ChapterDesc"):
-                    val = info.get(key)
-                    if val:
-                        hash_val = get_stable_hash(str(val))
-                        txt = text_map.get(str(hash_val), "")
-                        if txt:
-                            chapter_entry[key] = txt
-                if chapter_entry:
-                    chapter_map[chapter_id] = chapter_entry
+            if isinstance(raw_chapters, list):
+                for info in raw_chapters:
+                    chapter_id = str(info.get("ID", ""))
+                    if not chapter_id:
+                        continue
+                    chapter_entry: dict[str, str] = {}
+                    for key in ("ChapterName", "StageName", "ChapterDesc"):
+                        val = info.get(key)
+                        if val and isinstance(val, str) and val:
+                            hash_val = get_stable_hash(val)
+                            txt = text_map.get(str(hash_val), "")
+                            if txt:
+                                chapter_entry[key] = txt
+                    if chapter_entry:
+                        chapter_map[chapter_id] = chapter_entry
 
-        # ── 2. Main missions (uses Hash dict) ─────────────────────────────
+        # ── 2. Main missions (list format, uses Hash dict) ────────────────────
         mission_map: dict[str, dict] = {}
         mission_file = os.path.join(repo, "ExcelOutput", "MainMission.json")
         if os.path.exists(mission_file):
             with open(mission_file, encoding="utf-8") as f:
                 raw_missions = json.load(f)
-            for mission_id, info in raw_missions.items():
-                mission_entry: dict[str, object] = {"id": mission_id}
-                for key, item in info.items():
-                    if isinstance(item, dict) and "Hash" in item:
-                        txt = text_map.get(str(item["Hash"]), "")
-                        if txt:
-                            mission_entry[key] = txt
-                    elif key in (
-                        "NextMainMissionList",
-                        "ChapterID",
-                        "RewardID",
-                        "NextTrackMainMission",
-                    ):
-                        mission_entry[key] = item
-                mission_map[mission_id] = mission_entry
+            if isinstance(raw_missions, list):
+                for info in raw_missions:
+                    mission_id = str(info.get("MainMissionID", ""))
+                    if not mission_id:
+                        continue
+                    mission_entry = self._unhash_excel_item(info, text_map)
+                    mission_entry["id"] = mission_id
+                    mission_map[mission_id] = mission_entry
 
-        # ── 3. Sub missions (uses Hash dict) ──────────────────────────────
+        # ── 3. Sub missions (list format, uses Hash dict) ─────────────────────
         submission_map: dict[str, dict] = {}
         submission_file = os.path.join(repo, "ExcelOutput", "SubMission.json")
         if os.path.exists(submission_file):
             with open(submission_file, encoding="utf-8") as f:
                 raw_submissions = json.load(f)
-            for sub_id, info in raw_submissions.items():
-                sub_entry: dict[str, object] = {"id": sub_id}
-                for key, item in info.items():
-                    if isinstance(item, dict) and "Hash" in item:
-                        txt = text_map.get(str(item["Hash"]), "")
-                        if txt:
-                            sub_entry[key] = txt
-                    else:
-                        sub_entry[key] = item
-                submission_map[sub_id] = sub_entry
+            if isinstance(raw_submissions, list):
+                for info in raw_submissions:
+                    sub_id = str(info.get("SubMissionID", ""))
+                    if not sub_id:
+                        continue
+                    sub_entry = self._unhash_excel_item(info, text_map)
+                    sub_entry["id"] = sub_id
+                    submission_map[sub_id] = sub_entry
 
-        # ── 4. Build hierarchy from Config/Level/Mission/ ─────────────────
+        # ── 4. Build hierarchy from Config/Level/Mission/ ─────────────────────
         mission_hierarchy: list[dict] = []
         mission_dir = os.path.join(repo, "Config", "Level", "Mission")
         if os.path.isdir(mission_dir):
@@ -172,7 +196,8 @@ class StarrailExtractor(BaseExtractor):
                     continue
 
                 mission = mission_map[main_id]
-                if not mission.get("Name"):
+                name = mission.get("Name", "")
+                if not name or name == "N/A":
                     continue
 
                 # Collect submissions, deduplicate by text feature
@@ -198,7 +223,7 @@ class StarrailExtractor(BaseExtractor):
                 result_entry: dict = {
                     "mission": {
                         "id": main_id,
-                        "name": mission.get("Name", ""),
+                        "name": name,
                         "next_missions": mission.get("NextMainMissionList", []),
                         "next_track_mission": mission.get("NextTrackMainMission"),
                         "chapter_id": chapter_id,
@@ -295,7 +320,9 @@ class StarrailExtractor(BaseExtractor):
                         if sc:
                             # Parse next TalkSentenceID from TriggerCustomString
                             next_id = None
-                            trigger = option.get("TriggerCustomString", {}).get("Value", "")
+                            trigger = option.get("TriggerCustomString", "")
+                            if isinstance(trigger, dict):
+                                trigger = trigger.get("Value", "")
                             if trigger:
                                 m = re.search(r"(?:TalkSentence_)?(\d+)", str(trigger))
                                 if m:
@@ -313,7 +340,9 @@ class StarrailExtractor(BaseExtractor):
                     "RPG.GameCore.WaitCustomString",
                     "RPG.GameCore.TriggerCustomString",
                 ):
-                    custom_string = element.get("CustomString", {}).get("Value", "")
+                    custom_string = element.get("CustomString", "")
+                    if isinstance(custom_string, dict):
+                        custom_string = custom_string.get("Value", "")
                     if custom_string:
                         m = re.search(r"(?:TalkSentence_)?(\d+)", str(custom_string))
                         if m:
@@ -461,32 +490,32 @@ class StarrailExtractor(BaseExtractor):
             raw_avatars = json.load(f)
 
         avatars: list[dict] = []
-        for avatar_id, info in raw_avatars.items():
-            name = ""
-            if isinstance(info, dict):
-                for key, item in info.items():
-                    if isinstance(item, dict) and "Hash" in item:
-                        txt = text_map.get(str(item["Hash"]), "")
-                        if txt:
-                            if key.lower() in ("avatarname", "name"):
-                                name = txt
-                            else:
-                                info[key] = txt
-
-            if not name:
-                continue
-
-            entry: dict = {"id": avatar_id, "name": name}
-            for key, val in info.items():
-                if key in ("id", "name"):
+        if isinstance(raw_avatars, list):
+            for info in raw_avatars:
+                if not isinstance(info, dict):
                     continue
-                if isinstance(val, str) and val:
-                    entry[key] = val
-                elif isinstance(val, (int, float, bool)):
-                    entry[key] = val
-                elif isinstance(val, list) and val:
-                    entry[key] = val
-            avatars.append(entry)
+                avatar_id = str(info.get("AvatarID", ""))
+                if not avatar_id:
+                    continue
+                entry = self._unhash_excel_item(info, text_map)
+                entry["id"] = avatar_id
+                name = entry.get("AvatarName", "")
+                if not name or name == "N/A":
+                    continue
+                entry["name"] = name
+                avatars.append(entry)
+        else:
+            # Fallback for dict format (if ever encountered)
+            for avatar_id, info in raw_avatars.items():
+                if not isinstance(info, dict):
+                    continue
+                entry = self._unhash_excel_item(info, text_map)
+                entry["id"] = str(avatar_id)
+                name = entry.get("AvatarName", "")
+                if not name or name == "N/A":
+                    continue
+                entry["name"] = name
+                avatars.append(entry)
 
         if not avatars:
             raise ValueError(f"No avatar entries were extracted from: {avatar_path}")
@@ -550,35 +579,42 @@ class StarrailExtractor(BaseExtractor):
                     continue
 
             items: list[dict] = []
-            for item_id, info in raw_data.items():
-                if not isinstance(info, dict):
-                    continue
-
-                name = ""
-                desc = ""
-                entry: dict = {"id": item_id}
-
-                for key, item in info.items():
-                    if isinstance(item, dict) and "Hash" in item:
-                        txt = text_map.get(str(item["Hash"]), "")
-                        if txt:
-                            if "name" in key.lower():
-                                name = txt
-                            elif "desc" in key.lower() or "bgdesc" in key.lower():
-                                desc = txt
-                            else:
-                                entry[key] = txt
-                    else:
-                        entry[key] = item
-
-                if not name or "test" in str(name).lower():
-                    continue
-
-                entry["name"] = name
-                if desc:
-                    entry["desc"] = desc
-
-                items.append(entry)
+            if isinstance(raw_data, list):
+                for info in raw_data:
+                    if not isinstance(info, dict):
+                        continue
+                    item_id = str(info.get("ID", ""))
+                    if not item_id:
+                        continue
+                    entry = self._unhash_excel_item(info, text_map)
+                    entry["id"] = item_id
+                    name = entry.get("ItemName", "")
+                    if not name or "test" in str(name).lower():
+                        continue
+                    entry["name"] = name
+                    # Try common desc fields
+                    for desc_key in ("ItemDesc", "ItemBGDesc", "Desc", "Description"):
+                        desc = entry.get(desc_key, "")
+                        if desc:
+                            entry["desc"] = desc
+                            break
+                    items.append(entry)
+            else:
+                for item_id, info in raw_data.items():
+                    if not isinstance(info, dict):
+                        continue
+                    entry = self._unhash_excel_item(info, text_map)
+                    entry["id"] = str(item_id)
+                    name = entry.get("ItemName", "")
+                    if not name or "test" in str(name).lower():
+                        continue
+                    entry["name"] = name
+                    for desc_key in ("ItemDesc", "ItemBGDesc", "Desc", "Description"):
+                        desc = entry.get(desc_key, "")
+                        if desc:
+                            entry["desc"] = desc
+                            break
+                    items.append(entry)
 
             if items:
                 out_path = os.path.join(output_dir, f"{category}_{self.lang}.jsonl")

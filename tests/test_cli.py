@@ -135,33 +135,35 @@ def _write_minimal_starrail_raw(raw: Path) -> None:
     excel.mkdir(parents=True)
     (excel / "MissionChapterConfig.json").write_text(
         json.dumps(
-            {"100001": {"ChapterName": "ChapterName"}},
+            [{"ID": 100001, "ChapterName": "ChapterName"}],
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
     (excel / "MainMission.json").write_text(
         json.dumps(
-            {
-                "10001": {
+            [
+                {
+                    "MainMissionID": 10001,
                     "Name": {"Hash": 123},
                     "NextMainMissionList": [],
                     "ChapterID": 100001,
                     "RewardID": 11000201,
                 }
-            },
+            ],
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
     (excel / "SubMission.json").write_text(
         json.dumps(
-            {
-                "100020104": {
+            [
+                {
+                    "SubMissionID": 100020104,
                     "TargetText": {"Hash": 456},
                     "DescrptionText": {"Hash": 789},
                 }
-            },
+            ],
             ensure_ascii=False,
         ),
         encoding="utf-8",

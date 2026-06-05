@@ -124,42 +124,44 @@ class TestStarrailExtractor:
         )
         tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
 
-        # MissionChapterConfig (uses stable hash on string values)
+        # MissionChapterConfig (uses stable hash on string values) — list format
         excel = repo / "ExcelOutput"
         excel.mkdir(parents=True)
         excel.joinpath("MissionChapterConfig.json").write_text(
             json.dumps(
-                {"100001": {"ChapterName": "ChapterName"}},
+                [{"ID": 100001, "ChapterName": "ChapterName"}],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
 
-        # MainMission (uses Hash dict)
+        # MainMission (uses Hash dict) — list format
         excel.joinpath("MainMission.json").write_text(
             json.dumps(
-                {
-                    "10001": {
+                [
+                    {
+                        "MainMissionID": 10001,
                         "Name": {"Hash": 123},
                         "NextMainMissionList": [],
                         "ChapterID": 100001,
                         "RewardID": 11000201,
                     }
-                },
+                ],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
 
-        # SubMission (uses Hash dict)
+        # SubMission (uses Hash dict) — list format
         excel.joinpath("SubMission.json").write_text(
             json.dumps(
-                {
-                    "100020104": {
+                [
+                    {
+                        "SubMissionID": 100020104,
                         "TargetText": {"Hash": 456},
                         "DescrptionText": {"Hash": 789},
                     }
-                },
+                ],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -519,13 +521,14 @@ class TestExtractAvatars:
         excel.mkdir(parents=True)
         excel.joinpath("AvatarConfig.json").write_text(
             json.dumps(
-                {
-                    "1001": {
+                [
+                    {
+                        "AvatarID": 1001,
                         "AvatarName": {"Hash": 100},
                         "AvatarDesc": {"Hash": 200},
                         "DamageType": "Ice",
                     }
-                },
+                ],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -572,13 +575,14 @@ class TestExtractMisc:
         excel.mkdir(parents=True)
         excel.joinpath("ItemConfig.json").write_text(
             json.dumps(
-                {
-                    "2": {
+                [
+                    {
+                        "ID": 2,
                         "ItemName": {"Hash": 100},
                         "ItemDesc": {"Hash": 200},
                         "Rarity": "Rare",
                     }
-                },
+                ],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -612,7 +616,7 @@ class TestExtractMisc:
         excel.mkdir(parents=True)
         excel.joinpath("ItemConfig.json").write_text(
             json.dumps(
-                {"1": {"ItemName": {"Hash": 100}}},
+                [{"ID": 1, "ItemName": {"Hash": 100}}],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
