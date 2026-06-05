@@ -227,6 +227,148 @@ class StarrailExtractor(BaseExtractor):
 
     # ── Talks / Story ────────────────────────────────────────────────────
 
+    def _get_speaker_content(
+        self,
+        sent_id: int | str,
+        text_map: dict[str, str],
+        talk_sentence_map: dict[str, dict],
+    ) -> dict[str, str] | None:
+        """通过 TalkSentenceID 解析说话人和对话内容。"""
+        hash_info = talk_sentence_map.get(str(sent_id))
+        if not hash_info:
+            return None
+        name_hash = hash_info.get("TextmapTalkSentenceName", {}).get("Hash")
+        text_hash = hash_info.get("TalkSentenceText", {}).get("Hash")
+        if name_hash is None or text_hash is None:
+            return None
+        speaker = text_map.get(str(name_hash), "")
+        content = text_map.get(str(text_hash), "")
+        if not content:
+            return None
+        return {"role": speaker, "content": content}
+
+    def _parse_on_sequence(
+        self,
+        info: dict,
+        text_map: dict[str, str],
+        talk_sentence_map: dict[str, dict],
+    ) -> list[list[dict]]:
+        """解析单个 .json 中的 OnStartSequece / TaskList 对话序列。
+
+        处理以下 $type：
+        - RPG.GameCore.PlayAndWaitSimpleTalk → 普通对话
+        - RPG.GameCore.PlayOptionTalk       → 玩家选项
+        - RPG.GameCore.WaitCustomString     → 等待/触发对话
+        - RPG.GameCore.TriggerCustomString  → 触发对话
+        - RPG.GameCore.EndPerformance       → 结束标记
+
+        Returns:
+            对话 session 列表，每个 session 是 item 列表。
+        """
+        import re
+
+        sessions: list[list[dict]] = []
+        for sequence in info.get("OnStartSequece", []):
+            session: list[dict] = []
+            for element in sequence.get("TaskList", []):
+                etype = element.get("$type", "")
+
+                if etype == "RPG.GameCore.PlayAndWaitSimpleTalk":
+                    sub_session = {"type": etype, "conversations": []}
+                    for simple_talk in element.get("SimpleTalkList", []):
+                        sent_id = simple_talk.get("TalkSentenceID")
+                        sc = self._get_speaker_content(sent_id, text_map, talk_sentence_map)
+                        if sc:
+                            sub_session["conversations"].append({
+                                "role": sc["role"],
+                                "content": sc["content"],
+                                "talk_sentence_id": sent_id,
+                            })
+                    if sub_session["conversations"]:
+                        session.append(sub_session)
+
+                elif etype == "RPG.GameCore.PlayOptionTalk":
+                    sub_session = {"type": etype, "options": []}
+                    for option in element.get("OptionList", []):
+                        sent_id = option.get("TalkSentenceID")
+                        sc = self._get_speaker_content(sent_id, text_map, talk_sentence_map)
+                        if sc:
+                            # Parse next TalkSentenceID from TriggerCustomString
+                            next_id = None
+                            trigger = option.get("TriggerCustomString", {}).get("Value", "")
+                            if trigger:
+                                m = re.search(r"(?:TalkSentence_)?(\d+)", str(trigger))
+                                if m:
+                                    next_id = int(m.group(1))
+                            sub_session["options"].append({
+                                "role": sc["role"],
+                                "content": sc["content"],
+                                "talk_sentence_id": sent_id,
+                                "next_talk_sentence_id": next_id,
+                            })
+                    if sub_session["options"]:
+                        session.append(sub_session)
+
+                elif etype in (
+                    "RPG.GameCore.WaitCustomString",
+                    "RPG.GameCore.TriggerCustomString",
+                ):
+                    custom_string = element.get("CustomString", {}).get("Value", "")
+                    if custom_string:
+                        m = re.search(r"(?:TalkSentence_)?(\d+)", str(custom_string))
+                        if m:
+                            sent_id = int(m.group(1))
+                            sc = self._get_speaker_content(sent_id, text_map, talk_sentence_map)
+                            if sc:
+                                session.append({
+                                    "type": etype,
+                                    "role": sc["role"],
+                                    "content": sc["content"],
+                                    "talk_sentence_id": sent_id,
+                                })
+
+                elif etype == "RPG.GameCore.EndPerformance":
+                    if session:
+                        session.append({"type": etype})
+
+            if session:
+                sessions.append(session)
+
+        return sessions
+
+    def _merge_sessions(self, sessions: list[list[dict]]) -> list[list[dict]]:
+        """合并对话 session，去除 WaitCustomString 与 PlayAndWaitSimpleTalk 的重复。"""
+        merged: list[list[dict]] = []
+        for session in sessions:
+            merged_session: list[dict] = []
+            for item in session:
+                # Skip duplicate WaitCustomString that matches next PlayAndWaitSimpleTalk
+                if (
+                    merged_session
+                    and merged_session[-1].get("type") == "RPG.GameCore.WaitCustomString"
+                    and item.get("type") == "RPG.GameCore.PlayAndWaitSimpleTalk"
+                    and merged_session[-1].get("talk_sentence_id")
+                    == item["conversations"][0].get("talk_sentence_id")
+                ):
+                    del merged_session[-1]
+
+                # TriggerCustomString → add next_id to previous item
+                if (
+                    item.get("type") == "RPG.GameCore.TriggerCustomString"
+                    and merged_session
+                ):
+                    merged_session[-1]["next_talk_sentence_id"] = item.get(
+                        "talk_sentence_id"
+                    )
+                    continue
+
+                merged_session.append(item)
+
+            if merged_session and merged_session[-1].get("type") == "RPG.GameCore.EndPerformance":
+                merged.append(merged_session)
+
+        return merged
+
     def extract_talks(self, output_path: str | None = None) -> str:
         """从 Config/Level/ 提取对话和剧情文本。
 
@@ -243,7 +385,53 @@ class StarrailExtractor(BaseExtractor):
         Returns:
             JSONL 文件路径。
         """
-        raise NotImplementedError("extract_talks — Phase 5 实现中（Commit 4）")
+        import glob
+
+        text_map = self.load_text_map()
+        talk_sentence_map = self._load_talk_sentence_map()
+        repo = self.raw_repo_path
+
+        if output_path is None:
+            output_path = os.path.join("build", f"talks_{self.lang}.jsonl")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+        count = 0
+        with open(output_path, "w", encoding="utf-8") as out:
+            for source_dir in (
+                "Config/Level/Mission",
+                "Config/Level/Story",
+                "Config/Level/TrainVisitor",
+                "Config/Level/Activity",
+                "Config/Level/Message",
+            ):
+                full_dir = os.path.join(repo, source_dir)
+                if not os.path.isdir(full_dir):
+                    continue
+
+                source_type = os.path.basename(source_dir)
+                pattern = os.path.join(full_dir, "**", "*.json")
+                for json_file in glob.iglob(pattern, recursive=True):
+                    with open(json_file, encoding="utf-8") as f:
+                        try:
+                            info = json.load(f)
+                        except json.JSONDecodeError:
+                            continue
+
+                    sessions = self._parse_on_sequence(info, text_map, talk_sentence_map)
+                    sessions = self._merge_sessions(sessions)
+                    if sessions:
+                        entry = {
+                            "_source_type": source_type,
+                            "_source_file": os.path.basename(json_file),
+                            "sessions": sessions,
+                        }
+                        out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                        count += 1
+
+        if count == 0:
+            raise ValueError("No talk entries were extracted from available source files")
+
+        return output_path
 
     # ── Avatars ──────────────────────────────────────────────────────────
 

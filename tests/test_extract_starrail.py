@@ -251,3 +251,247 @@ class TestConvertStarrailQuests:
         content = Path(files[0]).read_text(encoding="utf-8")
         assert "# 空任务" in content
         assert "(empty mission)" in content
+
+
+class TestExtractTalks:
+    """StarrailExtractor.extract_talks 的测试."""
+
+    def test_extract_talks_end_to_end(self, tmp_path: Path) -> None:
+        """完整流程：TextMap + TalkSentenceConfig + Story JSON → JSONL."""
+        repo = tmp_path / "repo"
+
+        # TextMap
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps(
+                {
+                    "100": "三月七",
+                    "200": "你好呀",
+                    "300": "卡芙卡",
+                    "400": "听我说...",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        # TalkSentenceConfig
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("TalkSentenceConfig.json").write_text(
+            json.dumps(
+                {
+                    "50001": {
+                        "TextmapTalkSentenceName": {"Hash": 100},
+                        "TalkSentenceText": {"Hash": 200},
+                    },
+                    "50002": {
+                        "TextmapTalkSentenceName": {"Hash": 300},
+                        "TalkSentenceText": {"Hash": 400},
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # Story JSON with OnStartSequece
+        story_dir = repo / "Config" / "Level" / "Story"
+        story_dir.mkdir(parents=True)
+        story_dir.joinpath("Story_10001.json").write_text(
+            json.dumps(
+                {
+                    "OnStartSequece": [
+                        {
+                            "TaskList": [
+                                {
+                                    "$type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                                    "SimpleTalkList": [
+                                        {"TalkSentenceID": 50001}
+                                    ],
+                                },
+                                {
+                                    "$type": "RPG.GameCore.PlayOptionTalk",
+                                    "OptionList": [
+                                        {
+                                            "TalkSentenceID": 50002,
+                                            "TriggerCustomString": {
+                                                "Value": "TalkSentence_50003"
+                                            },
+                                        }
+                                    ],
+                                },
+                                {"$type": "RPG.GameCore.EndPerformance"},
+                            ]
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out = tmp_path / "talks_CHS.jsonl"
+        result_path = ext.extract_talks(str(out))
+
+        assert result_path == str(out)
+        lines = out.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 1
+
+        entry = json.loads(lines[0])
+        assert entry["_source_type"] == "Story"
+        assert entry["_source_file"] == "Story_10001.json"
+
+        sessions = entry["sessions"]
+        assert len(sessions) == 1
+        session = sessions[0]
+        assert len(session) == 3  # PlayAndWaitSimpleTalk + PlayOptionTalk + EndPerformance
+
+        # First item: simple talk
+        assert session[0]["type"] == "RPG.GameCore.PlayAndWaitSimpleTalk"
+        assert session[0]["conversations"][0]["role"] == "三月七"
+        assert session[0]["conversations"][0]["content"] == "你好呀"
+
+        # Second item: option talk
+        assert session[1]["type"] == "RPG.GameCore.PlayOptionTalk"
+        assert session[1]["options"][0]["role"] == "卡芙卡"
+        assert session[1]["options"][0]["content"] == "听我说..."
+        assert session[1]["options"][0]["next_talk_sentence_id"] == 50003
+
+        # Third item: end performance
+        assert session[2]["type"] == "RPG.GameCore.EndPerformance"
+
+    def test_merge_wait_custom_string(self, tmp_path: Path) -> None:
+        """验证 WaitCustomString 与 PlayAndWaitSimpleTalk 的去重合并."""
+        repo = tmp_path / "repo"
+
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps({"100": "三月七", "200": "重复内容"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("TalkSentenceConfig.json").write_text(
+            json.dumps(
+                {
+                    "50001": {
+                        "TextmapTalkSentenceName": {"Hash": 100},
+                        "TalkSentenceText": {"Hash": 200},
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        story_dir = repo / "Config" / "Level" / "Story"
+        story_dir.mkdir(parents=True)
+        story_dir.joinpath("Story_10002.json").write_text(
+            json.dumps(
+                {
+                    "OnStartSequece": [
+                        {
+                            "TaskList": [
+                                {
+                                    "$type": "RPG.GameCore.WaitCustomString",
+                                    "CustomString": {"Value": "TalkSentence_50001"},
+                                },
+                                {
+                                    "$type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                                    "SimpleTalkList": [
+                                        {"TalkSentenceID": 50001}
+                                    ],
+                                },
+                                {"$type": "RPG.GameCore.EndPerformance"},
+                            ]
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out = tmp_path / "talks_CHS.jsonl"
+        ext.extract_talks(str(out))
+
+        entry = json.loads(out.read_text(encoding="utf-8").strip().split("\n")[0])
+        session = entry["sessions"][0]
+        # WaitCustomString should be merged away (duplicate with PlayAndWaitSimpleTalk)
+        assert len(session) == 2
+        assert session[0]["type"] == "RPG.GameCore.PlayAndWaitSimpleTalk"
+        assert session[1]["type"] == "RPG.GameCore.EndPerformance"
+
+
+class TestConvertStarrailTalks:
+    """convert_starrail_talks 的测试."""
+
+    def test_single_story_basic(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_talks
+
+        jsonl = tmp_path / "talks.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "_source_type": "Story",
+                    "_source_file": "Story_10001.json",
+                    "sessions": [
+                        [
+                            {
+                                "type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                                "conversations": [
+                                    {"role": "三月七", "content": "你好呀"}
+                                ],
+                            },
+                            {
+                                "type": "RPG.GameCore.PlayOptionTalk",
+                                "options": [
+                                    {"role": "{NICKNAME}", "content": "选项A"}
+                                ],
+                            },
+                        ]
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_talks(str(jsonl), str(out_dir))
+
+        assert len(files) == 1
+        content = Path(files[0]).read_text(encoding="utf-8")
+        assert "# Story Story_10001.json" in content
+        assert "**三月七**：你好呀" in content
+        assert "> {NICKNAME}：选项A" in content
+
+    def test_empty_talk_skipped(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_talks
+
+        jsonl = tmp_path / "talks.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "_source_type": "Story",
+                    "_source_file": "Empty.json",
+                    "sessions": [],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_talks(str(jsonl), str(out_dir))
+        assert len(files) == 0

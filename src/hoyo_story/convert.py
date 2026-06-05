@@ -450,6 +450,89 @@ def convert_starrail_quests(jsonl_path: str, output_dir: str) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Starrail Talks
+# ═══════════════════════════════════════════════════════════════════════════
+
+def convert_starrail_talks(jsonl_path: str, output_dir: str) -> list[str]:
+    """将星铁 talks JSONL 按来源类型分文件转换为 .txt。"""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Group by source type
+    by_type: dict[str, list[dict]] = {}
+    with open(jsonl_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            stype = entry.get("_source_type", "unknown")
+            by_type.setdefault(stype, []).append(entry)
+
+    written: list[str] = []
+    for stype, entries in sorted(by_type.items()):
+        type_dir = out_dir / stype
+        type_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, entry in enumerate(entries):
+            file_name = entry.get("_source_file", f"talk_{i}")
+            sessions: list[list[dict]] = entry.get("sessions", [])
+
+            lines: list[str] = [f"# {stype} {file_name}", ""]
+
+            for session in sessions:
+                for item in session:
+                    itype = item.get("type", "")
+
+                    if itype == "RPG.GameCore.PlayAndWaitSimpleTalk":
+                        for conv in item.get("conversations", []):
+                            role = conv.get("role", "")
+                            content = conv.get("content", "")
+                            if content:
+                                if role:
+                                    lines.append(f"**{role}**：{content}")
+                                else:
+                                    lines.append(content)
+
+                    elif itype == "RPG.GameCore.PlayOptionTalk":
+                        lines.append("")
+                        for opt in item.get("options", []):
+                            role = opt.get("role", "")
+                            content = opt.get("content", "")
+                            if content:
+                                lines.append(f"> {role}：{content}")
+                        lines.append("")
+
+                    elif itype in (
+                        "RPG.GameCore.WaitCustomString",
+                        "RPG.GameCore.TriggerCustomString",
+                    ):
+                        role = item.get("role", "")
+                        content = item.get("content", "")
+                        if content:
+                            if role:
+                                lines.append(f"**{role}**：{content}")
+                            else:
+                                lines.append(content)
+
+                lines.append("")
+
+            if len(lines) <= 2:
+                continue
+
+            content = "\n".join(lines)
+            safe_name = _escape_filename(str(file_name))
+            fpath = type_dir / f"{i:05d}_{safe_name}.txt"
+            fpath.write_text(content, encoding="utf-8")
+            written.append(str(fpath))
+
+    return written
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 
 def clean_variables(text: str) -> str:
     """清洗文本中的游戏变量残留。"""

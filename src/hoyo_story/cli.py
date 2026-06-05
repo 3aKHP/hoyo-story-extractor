@@ -174,9 +174,13 @@ def pipeline(
         _convert_talks = convert_talks
         _convert_avatars = convert_avatars
         if game == "starrail":
-            from hoyo_story.convert import convert_starrail_quests
+            from hoyo_story.convert import (
+                convert_starrail_quests,
+                convert_starrail_talks,
+            )
 
             _convert_quests = convert_starrail_quests
+            _convert_talks = convert_starrail_talks
 
         pipelines = {
             "quests": (extractor.extract_quests, _convert_quests),
