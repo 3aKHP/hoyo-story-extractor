@@ -169,10 +169,19 @@ def pipeline(
     def action() -> None:
         extractor = _get_extractor(game, repo, lang)
 
+        # Select game-specific converters
+        _convert_quests = convert_quests
+        _convert_talks = convert_talks
+        _convert_avatars = convert_avatars
+        if game == "starrail":
+            from hoyo_story.convert import convert_starrail_quests
+
+            _convert_quests = convert_starrail_quests
+
         pipelines = {
-            "quests": (extractor.extract_quests, convert_quests),
-            "talks": (extractor.extract_talks, convert_talks),
-            "avatars": (extractor.extract_avatars, convert_avatars),
+            "quests": (extractor.extract_quests, _convert_quests),
+            "talks": (extractor.extract_talks, _convert_talks),
+            "avatars": (extractor.extract_avatars, _convert_avatars),
         }
 
         if kind == "all":

@@ -102,3 +102,152 @@ class TestStarrailExtractor:
         ext = StarrailExtractor(str(tmp_path / "repo"))
         with pytest.raises(FileNotFoundError):
             ext._load_talk_sentence_map()
+
+    def test_extract_quests_end_to_end(self, tmp_path: Path) -> None:
+        """完整流程：TextMap + ExcelOutput + MissionInfo → JSONL."""
+        repo = tmp_path / "repo"
+
+        # TextMap
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps(
+                {
+                    "981257900": "第一章",  # stable_hash("ChapterName")
+                    "123": "风暴之眼",      # MainMission Name
+                    "456": "离开看看外面",   # SubMission TargetText
+                    "789": "你移开视线...",  # SubMission DescrptionText
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        # MissionChapterConfig (uses stable hash on string values)
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("MissionChapterConfig.json").write_text(
+            json.dumps(
+                {"100001": {"ChapterName": "ChapterName"}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # MainMission (uses Hash dict)
+        excel.joinpath("MainMission.json").write_text(
+            json.dumps(
+                {
+                    "10001": {
+                        "Name": {"Hash": 123},
+                        "NextMainMissionList": [],
+                        "ChapterID": 100001,
+                        "RewardID": 11000201,
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # SubMission (uses Hash dict)
+        excel.joinpath("SubMission.json").write_text(
+            json.dumps(
+                {
+                    "100020104": {
+                        "TargetText": {"Hash": 456},
+                        "DescrptionText": {"Hash": 789},
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        # MissionInfo (hierarchy)
+        mission_dir = repo / "Config" / "Level" / "Mission" / "10001"
+        mission_dir.mkdir(parents=True)
+        mission_dir.joinpath("MissionInfo_10001.json").write_text(
+            json.dumps(
+                {
+                    "MainMissionID": 10001,
+                    "SubMissionList": [{"ID": 100020104}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out = tmp_path / "quests_CHS.jsonl"
+        result_path = ext.extract_quests(str(out))
+
+        assert result_path == str(out)
+        lines = out.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 1
+
+        entry = json.loads(lines[0])
+        assert entry["mission"]["name"] == "风暴之眼"
+        assert entry["mission"]["chapter_id"] == "100001"
+        assert entry["mission"]["chapter"]["ChapterName"] == "第一章"
+        assert len(entry["submissions"]) == 1
+        assert entry["submissions"][0]["target"] == "离开看看外面"
+        assert entry["submissions"][0]["desc"] == "你移开视线..."
+        assert entry["submissions"][0]["ids"] == ["100020104"]
+
+
+class TestConvertStarrailQuests:
+    """convert_starrail_quests 的测试."""
+
+    def test_single_mission_basic(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_quests
+
+        jsonl = tmp_path / "quests.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "mission": {
+                        "name": "风暴之眼",
+                        "chapter": {"ChapterName": "第一章", "StageName": "第一幕"},
+                    },
+                    "submissions": [
+                        {"ids": ["1"], "target": "离开看看外面", "desc": "你移开视线..."}
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_quests(str(jsonl), str(out_dir))
+
+        assert len(files) == 1
+        content = Path(files[0]).read_text(encoding="utf-8")
+        assert "# 风暴之眼" in content
+        assert "> 第一章 第一幕" in content
+        assert "### 离开看看外面" in content
+        assert "你移开视线..." in content
+
+    def test_empty_mission(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_quests
+
+        jsonl = tmp_path / "quests.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {"mission": {"name": "空任务"}, "submissions": []},
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_quests(str(jsonl), str(out_dir))
+
+        assert len(files) == 1
+        content = Path(files[0]).read_text(encoding="utf-8")
+        assert "# 空任务" in content
+        assert "(empty mission)" in content

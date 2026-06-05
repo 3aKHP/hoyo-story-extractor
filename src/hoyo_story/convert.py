@@ -387,6 +387,69 @@ def convert_misc(jsonl_path: str, output_dir: str) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Starrail Quests
+# ═══════════════════════════════════════════════════════════════════════════
+
+def convert_starrail_quests(jsonl_path: str, output_dir: str) -> list[str]:
+    """将星铁 mission JSONL 转换为按任务分文件的 .txt。"""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[str] = []
+    count = 0
+
+    with open(jsonl_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry: dict = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            count += 1
+            mission = entry.get("mission", {})
+            name = mission.get("name", f"mission_{count}")
+            chapter = mission.get("chapter", {})
+
+            lines: list[str] = [f"# {name}", ""]
+
+            # Chapter info
+            if chapter:
+                chapter_name = chapter.get("ChapterName", "")
+                stage_name = chapter.get("StageName", "")
+                if chapter_name and stage_name:
+                    lines.append(f"> {chapter_name} {stage_name}")
+                elif chapter_name:
+                    lines.append(f"> {chapter_name}")
+                lines.append("")
+
+            # Submissions
+            submissions: list[dict] = entry.get("submissions", [])
+            for sub in submissions:
+                target = sub.get("target", "")
+                desc = sub.get("desc", "")
+                if target:
+                    lines.append(f"### {target}")
+                    lines.append("")
+                if desc:
+                    lines.append(desc)
+                    lines.append("")
+
+            if len(lines) <= 2:
+                lines.append("(empty mission)")
+
+            content = "\n".join(lines)
+            safe_name = _escape_filename(name)
+            fpath = out_dir / f"{count:04d}_{safe_name}.txt"
+            fpath.write_text(content, encoding="utf-8")
+            written.append(str(fpath))
+
+    return written
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 
 def clean_variables(text: str) -> str:
     """清洗文本中的游戏变量残留。"""

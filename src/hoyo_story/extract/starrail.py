@@ -96,7 +96,134 @@ class StarrailExtractor(BaseExtractor):
         Returns:
             JSONL 文件路径。
         """
-        raise NotImplementedError("extract_quests — Phase 5 实现中（Commit 3）")
+        import glob
+
+        text_map = self.load_text_map()
+        repo = self.raw_repo_path
+
+        # ── 1. Chapter config (uses stable hash) ──────────────────────────
+        chapter_map: dict[str, dict] = {}
+        chapter_file = os.path.join(repo, "ExcelOutput", "MissionChapterConfig.json")
+        if os.path.exists(chapter_file):
+            with open(chapter_file, encoding="utf-8") as f:
+                raw_chapters = json.load(f)
+            for chapter_id, info in raw_chapters.items():
+                chapter_entry: dict[str, str] = {}
+                for key in ("ChapterName", "StageName", "ChapterDesc"):
+                    val = info.get(key)
+                    if val:
+                        hash_val = get_stable_hash(str(val))
+                        txt = text_map.get(str(hash_val), "")
+                        if txt:
+                            chapter_entry[key] = txt
+                if chapter_entry:
+                    chapter_map[chapter_id] = chapter_entry
+
+        # ── 2. Main missions (uses Hash dict) ─────────────────────────────
+        mission_map: dict[str, dict] = {}
+        mission_file = os.path.join(repo, "ExcelOutput", "MainMission.json")
+        if os.path.exists(mission_file):
+            with open(mission_file, encoding="utf-8") as f:
+                raw_missions = json.load(f)
+            for mission_id, info in raw_missions.items():
+                mission_entry: dict[str, object] = {"id": mission_id}
+                for key, item in info.items():
+                    if isinstance(item, dict) and "Hash" in item:
+                        txt = text_map.get(str(item["Hash"]), "")
+                        if txt:
+                            mission_entry[key] = txt
+                    elif key in (
+                        "NextMainMissionList",
+                        "ChapterID",
+                        "RewardID",
+                        "NextTrackMainMission",
+                    ):
+                        mission_entry[key] = item
+                mission_map[mission_id] = mission_entry
+
+        # ── 3. Sub missions (uses Hash dict) ──────────────────────────────
+        submission_map: dict[str, dict] = {}
+        submission_file = os.path.join(repo, "ExcelOutput", "SubMission.json")
+        if os.path.exists(submission_file):
+            with open(submission_file, encoding="utf-8") as f:
+                raw_submissions = json.load(f)
+            for sub_id, info in raw_submissions.items():
+                sub_entry: dict[str, object] = {"id": sub_id}
+                for key, item in info.items():
+                    if isinstance(item, dict) and "Hash" in item:
+                        txt = text_map.get(str(item["Hash"]), "")
+                        if txt:
+                            sub_entry[key] = txt
+                    else:
+                        sub_entry[key] = item
+                submission_map[sub_id] = sub_entry
+
+        # ── 4. Build hierarchy from Config/Level/Mission/ ─────────────────
+        mission_hierarchy: list[dict] = []
+        mission_dir = os.path.join(repo, "Config", "Level", "Mission")
+        if os.path.isdir(mission_dir):
+            pattern = os.path.join(mission_dir, "*", "MissionInfo_*.json")
+            for mission_info_file in glob.iglob(pattern):
+                with open(mission_info_file, encoding="utf-8") as f:
+                    info = json.load(f)
+
+                main_id = str(info.get("MainMissionID", ""))
+                if main_id not in mission_map:
+                    continue
+
+                mission = mission_map[main_id]
+                if not mission.get("Name"):
+                    continue
+
+                # Collect submissions, deduplicate by text feature
+                seen: dict[str, list[str]] = {}
+                for sub in info.get("SubMissionList", []):
+                    sub_id = str(sub.get("ID", ""))
+                    if sub_id not in submission_map:
+                        continue
+                    submission = submission_map[sub_id]
+                    target = str(submission.get("TargetText", ""))
+                    desc = str(submission.get("DescrptionText", ""))
+                    if not target or target == "N/A":
+                        continue
+                    feature = f"{target}|||{desc}"
+                    seen.setdefault(feature, []).append(sub_id)
+
+                submissions = []
+                for feature, ids in seen.items():
+                    target, desc = feature.split("|||", 1)
+                    submissions.append({"ids": ids, "target": target, "desc": desc})
+
+                chapter_id = str(mission.get("ChapterID", ""))
+                result_entry: dict = {
+                    "mission": {
+                        "id": main_id,
+                        "name": mission.get("Name", ""),
+                        "next_missions": mission.get("NextMainMissionList", []),
+                        "next_track_mission": mission.get("NextTrackMainMission"),
+                        "chapter_id": chapter_id,
+                        "reward_id": mission.get("RewardID"),
+                    },
+                    "submissions": submissions,
+                }
+                if chapter_id and chapter_id in chapter_map:
+                    result_entry["mission"]["chapter"] = chapter_map[chapter_id]
+
+                mission_hierarchy.append(result_entry)
+
+        if not mission_hierarchy:
+            raise ValueError("No mission entries were extracted from available source files")
+
+        # ── 5. Write JSONL ──────────────────────────────────────────────
+        if output_path is None:
+            output_path = os.path.join("build", f"quests_{self.lang}.jsonl")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as out:
+            for entry in mission_hierarchy:
+                out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        return output_path
 
     # ── Talks / Story ────────────────────────────────────────────────────
 
