@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Project-specific — NEVER commit raw game data
+*_raw/
+genshin_raw/
+*.json
+*.jsonl
+output/
+outputs/
+extracted/
+
+# Build artifacts
+build/
+
+# Local dev experiments
+local_dev/
+local_prod/
+
+# Ruff cache
+.ruff_cache/
+
+# Coverage
+htmlcov/
+.coverage
+coverage.xml

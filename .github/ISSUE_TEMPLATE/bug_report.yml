@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible problem in the extractor or CLI.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping make the project easier to run on other machines.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `uv run hoyo-extract --version`, or the commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Include the exact command and relevant paths, but do not upload raw game data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Paste terminal output if available.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, uv version, Git version, and language code.
+    validations:
+      required: false
