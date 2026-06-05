@@ -42,11 +42,40 @@ GENSHIN_PATHS: list[str] = [
 ]
 
 STARRAIL_PATHS: list[str] = [
-    "TextMap/TextMapCHS.json",
-    "TextMap/TextMapMainCHS.json",
-    "TextMap/TextMapJP.json",
-    "TextMap/TextMapMainJP.json",
-    "Story",
+    # TextMap (all supported languages)
+    "/TextMap/TextMapCHS.json",
+    "/TextMap/TextMapMainCHS.json",
+    "/TextMap/TextMapJP.json",
+    "/TextMap/TextMapMainJP.json",
+    "/TextMap/TextMapEN.json",
+    "/TextMap/TextMapMainEN.json",
+    "/TextMap/TextMapKR.json",
+    "/TextMap/TextMapMainKR.json",
+    # Mission hierarchy
+    "/ExcelOutput/MainMission.json",
+    "/ExcelOutput/SubMission.json",
+    "/ExcelOutput/MissionChapterConfig.json",
+    # Talk sentence lookup
+    "/ExcelOutput/TalkSentenceConfig.json",
+    # Avatar / character data
+    "/ExcelOutput/AvatarConfig.json",
+    "/ExcelOutput/AvatarSkillTreeConfig.json",
+    "/ExcelOutput/AvatarPromotionConfig.json",
+    "/ExcelOutput/AvatarPlayerTitleConfig.json",
+    # Item / misc
+    "/ExcelOutput/ItemConfig.json",
+    "/ExcelOutput/ItemConfigAvatar.json",
+    "/ExcelOutput/ItemConfigBook.json",
+    "/ExcelOutput/ItemConfigRelic.json",
+    "/ExcelOutput/ItemConfigEquipment.json",
+    "/ExcelOutput/ItemPlayerCard.json",
+    # Level configs (dialogue / story / activity)
+    "/Config/Level/Mission/",
+    "/Config/Level/Story/",
+    "/Config/Level/TrainVisitor/",
+    "/Config/Level/Activity/",
+    # Phone messages
+    "/Config/Level/Message/",
 ]
 
 ZZZ_PATHS: list[str] = []  # 待调研

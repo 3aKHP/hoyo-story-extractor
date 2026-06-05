@@ -65,7 +65,7 @@ def test_fetch_missing_env_is_user_friendly(
 
 
 def test_unimplemented_game_is_rejected_without_traceback(tmp_path: Path) -> None:
-    result = runner.invoke(app, ["pipeline", "starrail", str(tmp_path), str(tmp_path / "out")])
+    result = runner.invoke(app, ["pipeline", "zzz", str(tmp_path), str(tmp_path / "out")])
 
     assert result.exit_code != 0
     assert "planned but not implemented" in result.output

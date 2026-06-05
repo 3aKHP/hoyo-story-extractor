@@ -29,7 +29,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-IMPLEMENTED_GAMES = {"genshin"}
+IMPLEMENTED_GAMES = {"genshin", "starrail"}
 
 
 def _run_cli(action: Callable[[], None]) -> None:
@@ -224,7 +224,11 @@ def _get_extractor(game: str, repo: str, lang: str):
         from hoyo_story.extract.genshin import GenshinExtractor
 
         return GenshinExtractor(repo, lang)
-    raise typer.BadParameter(f"Unknown game: {game}. Supported: genshin")
+    if game == "starrail":
+        from hoyo_story.extract.starrail import StarrailExtractor
+
+        return StarrailExtractor(repo, lang)
+    raise typer.BadParameter(f"Unknown game: {game}. Supported: genshin, starrail")
 
 
 if __name__ == "__main__":
