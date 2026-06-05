@@ -533,6 +533,102 @@ def convert_starrail_talks(jsonl_path: str, output_dir: str) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Starrail Avatars
+# ═══════════════════════════════════════════════════════════════════════════
+
+def convert_starrail_avatars(jsonl_path: str, output_dir: str) -> list[str]:
+    """将星铁 avatars JSONL 按角色分文件转换为 .txt。"""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[str] = []
+    with open(jsonl_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                avatar = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            name = avatar.get("name", "")
+            if not name:
+                continue
+
+            lines: list[str] = [f"# {name}", ""]
+
+            # Basic info fields
+            for key, val in avatar.items():
+                if key in ("id", "name"):
+                    continue
+                if isinstance(val, str) and val:
+                    lines.append(f"- **{key}**: {val}")
+                elif isinstance(val, (int, float)) and not isinstance(val, bool):
+                    lines.append(f"- **{key}**: {val}")
+
+            if len(lines) > 2:
+                lines.append("")
+
+            content = "\n".join(lines)
+            safe_name = _escape_filename(name)
+            fpath = out_dir / f"{safe_name}.txt"
+            fpath.write_text(content, encoding="utf-8")
+            written.append(str(fpath))
+
+    return written
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Starrail Misc
+# ═══════════════════════════════════════════════════════════════════════════
+
+def convert_starrail_misc(jsonl_path: str, output_dir: str) -> list[str]:
+    """将星铁 misc JSONL 转换为按条目分文件的 .txt。"""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[str] = []
+    count = 0
+    with open(jsonl_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            count += 1
+            name = item.get("name", f"item_{count}")
+            lines: list[str] = [f"# {name}", ""]
+
+            desc = item.get("desc", "")
+            if desc:
+                lines.append(desc)
+                lines.append("")
+
+            # Other text fields
+            for key, val in item.items():
+                if key in ("id", "name", "desc"):
+                    continue
+                if isinstance(val, str) and val:
+                    lines.append(f"- **{key}**: {val}")
+
+            if len(lines) > 2:
+                lines.append("")
+
+            content = "\n".join(lines)
+            safe_name = _escape_filename(name)
+            fpath = out_dir / f"{count:04d}_{safe_name}.txt"
+            fpath.write_text(content, encoding="utf-8")
+            written.append(str(fpath))
+
+    return written
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 
 def clean_variables(text: str) -> str:
     """清洗文本中的游戏变量残留。"""

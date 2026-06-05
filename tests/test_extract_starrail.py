@@ -495,3 +495,180 @@ class TestConvertStarrailTalks:
         out_dir = tmp_path / "out"
         files = convert_starrail_talks(str(jsonl), str(out_dir))
         assert len(files) == 0
+
+
+class TestExtractAvatars:
+    """StarrailExtractor.extract_avatars 的测试."""
+
+    def test_extract_avatars_end_to_end(self, tmp_path: Path) -> None:
+        """完整流程：TextMap + AvatarConfig → JSONL."""
+        repo = tmp_path / "repo"
+
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps(
+                {"100": "三月七", "200": "冰属性角色"},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("AvatarConfig.json").write_text(
+            json.dumps(
+                {
+                    "1001": {
+                        "AvatarName": {"Hash": 100},
+                        "AvatarDesc": {"Hash": 200},
+                        "DamageType": "Ice",
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out = tmp_path / "avatars_CHS.jsonl"
+        result_path = ext.extract_avatars(str(out))
+
+        assert result_path == str(out)
+        lines = out.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 1
+
+        avatar = json.loads(lines[0])
+        assert avatar["name"] == "三月七"
+        assert avatar["AvatarDesc"] == "冰属性角色"
+        assert avatar["DamageType"] == "Ice"
+
+    def test_extract_avatars_missing_file_raises(self, tmp_path: Path) -> None:
+        ext = StarrailExtractor(str(tmp_path / "repo"))
+        with pytest.raises(FileNotFoundError):
+            ext.extract_avatars()
+
+
+class TestExtractMisc:
+    """StarrailExtractor.extract_misc 的测试."""
+
+    def test_extract_misc_items(self, tmp_path: Path) -> None:
+        """完整流程：TextMap + ItemConfig → JSONL."""
+        repo = tmp_path / "repo"
+
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps(
+                {"100": "信用点", "200": "星际和平公司发行的货币"},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("ItemConfig.json").write_text(
+            json.dumps(
+                {
+                    "2": {
+                        "ItemName": {"Hash": 100},
+                        "ItemDesc": {"Hash": 200},
+                        "Rarity": "Rare",
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out_dir = tmp_path / "misc"
+        results = ext.extract_misc(str(out_dir))
+
+        assert "items" in results
+        lines = Path(results["items"]).read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 1
+
+        item = json.loads(lines[0])
+        assert item["name"] == "信用点"
+        assert item["desc"] == "星际和平公司发行的货币"
+        assert item["Rarity"] == "Rare"
+
+    def test_extract_misc_skips_test_names(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps({"100": "test_item"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("ItemConfig.json").write_text(
+            json.dumps(
+                {"1": {"ItemName": {"Hash": 100}}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        with pytest.raises(ValueError):
+            ext.extract_misc()
+
+
+class TestConvertStarrailAvatars:
+    """convert_starrail_avatars 的测试."""
+
+    def test_single_avatar(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_avatars
+
+        jsonl = tmp_path / "avatars.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {"id": "1001", "name": "三月七", "DamageType": "Ice"},
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_avatars(str(jsonl), str(out_dir))
+
+        assert len(files) == 1
+        content = Path(files[0]).read_text(encoding="utf-8")
+        assert "# 三月七" in content
+        assert "**DamageType**: Ice" in content
+
+
+class TestConvertStarrailMisc:
+    """convert_starrail_misc 的测试."""
+
+    def test_single_item(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_misc
+
+        jsonl = tmp_path / "misc.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {"id": "2", "name": "信用点", "desc": "星际货币", "Rarity": "Rare"},
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_misc(str(jsonl), str(out_dir))
+
+        assert len(files) == 1
+        content = Path(files[0]).read_text(encoding="utf-8")
+        assert "# 信用点" in content
+        assert "星际货币" in content
+        assert "**Rarity**: Rare" in content

@@ -436,13 +436,13 @@ class StarrailExtractor(BaseExtractor):
     # ── Avatars ──────────────────────────────────────────────────────────
 
     def extract_avatars(self, output_path: str | None = None) -> str:
-        """从 ExcelOutput 提取角色资料、语音、故事。
+        """从 ExcelOutput 提取角色基础信息。
 
         数据源：
-        - ExcelOutput/AvatarConfig.json          → 基础信息
-        - ExcelOutput/AvatarSkillTreeConfig.json → 技能树
-        - ExcelOutput/AvatarPromotionConfig.json → 晋升信息
-        - ExcelOutput/AvatarPlayerTitleConfig.json → 称号
+        - ExcelOutput/AvatarConfig.json → 基础信息（名称、描述、属性、命途等）
+
+        当前为简化实现，仅提取 AvatarConfig 中的基础字段。
+        语音、故事、技能等需后续从更多 ExcelOutput 文件合并。
 
         Args:
             output_path: JSONL 输出路径。
@@ -450,19 +450,69 @@ class StarrailExtractor(BaseExtractor):
         Returns:
             JSONL 文件路径。
         """
-        raise NotImplementedError("extract_avatars — Phase 5 实现中（Commit 5）")
+        text_map = self.load_text_map()
+        repo = self.raw_repo_path
+
+        avatar_path = os.path.join(repo, "ExcelOutput", "AvatarConfig.json")
+        if not os.path.exists(avatar_path):
+            raise FileNotFoundError(f"Avatar data file not found: {avatar_path}")
+
+        with open(avatar_path, encoding="utf-8") as f:
+            raw_avatars = json.load(f)
+
+        avatars: list[dict] = []
+        for avatar_id, info in raw_avatars.items():
+            name = ""
+            if isinstance(info, dict):
+                for key, item in info.items():
+                    if isinstance(item, dict) and "Hash" in item:
+                        txt = text_map.get(str(item["Hash"]), "")
+                        if txt:
+                            if key.lower() in ("avatarname", "name"):
+                                name = txt
+                            else:
+                                info[key] = txt
+
+            if not name:
+                continue
+
+            entry: dict = {"id": avatar_id, "name": name}
+            for key, val in info.items():
+                if key in ("id", "name"):
+                    continue
+                if isinstance(val, str) and val:
+                    entry[key] = val
+                elif isinstance(val, (int, float, bool)):
+                    entry[key] = val
+                elif isinstance(val, list) and val:
+                    entry[key] = val
+            avatars.append(entry)
+
+        if not avatars:
+            raise ValueError(f"No avatar entries were extracted from: {avatar_path}")
+
+        if output_path is None:
+            output_path = os.path.join("build", f"avatars_{self.lang}.jsonl")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as out:
+            for avatar in avatars:
+                out.write(json.dumps(avatar, ensure_ascii=False) + "\n")
+
+        return output_path
 
     # ── Misc ─────────────────────────────────────────────────────────────
 
     def extract_misc(self, output_dir: str | None = None) -> dict[str, str]:
-        """提取物品、书籍、光锥、遗器等杂项文本。
+        """提取物品、书籍、光锥、遗器、玩家名片等杂项文本。
 
         数据源：
         - ExcelOutput/ItemConfig.json          → 通用物品
-        - ExcelOutput/ItemConfigBook.json      → 书籍
-        - ExcelOutput/ItemConfigEquipment.json → 光锥
-        - ExcelOutput/ItemConfigRelic.json     → 遗器
-        - ExcelOutput/ItemPlayerCard.json      → 玩家名片
+        - ExcelOutput/ItemConfigAvatar.json      → 角色相关物品
+        - ExcelOutput/ItemConfigBook.json        → 书籍
+        - ExcelOutput/ItemConfigEquipment.json   → 光锥
+        - ExcelOutput/ItemConfigRelic.json       → 遗器
+        - ExcelOutput/ItemPlayerCard.json        → 玩家名片
 
         Args:
             output_dir: 输出目录。
@@ -470,4 +520,74 @@ class StarrailExtractor(BaseExtractor):
         Returns:
             {类别: JSONL 文件路径} 的映射。
         """
-        raise NotImplementedError("extract_misc — Phase 5 实现中（Commit 5）")
+        text_map = self.load_text_map()
+        repo = self.raw_repo_path
+
+        if output_dir is None:
+            output_dir = os.path.join("build", f"misc_{self.lang}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        result: dict[str, str] = {}
+
+        item_files = {
+            "items": "ItemConfig.json",
+            "avatars": "ItemConfigAvatar.json",
+            "books": "ItemConfigBook.json",
+            "equipment": "ItemConfigEquipment.json",
+            "relics": "ItemConfigRelic.json",
+            "player_cards": "ItemPlayerCard.json",
+        }
+
+        for category, filename in item_files.items():
+            path = os.path.join(repo, "ExcelOutput", filename)
+            if not os.path.exists(path):
+                continue
+
+            with open(path, encoding="utf-8") as f:
+                try:
+                    raw_data = json.load(f)
+                except json.JSONDecodeError:
+                    continue
+
+            items: list[dict] = []
+            for item_id, info in raw_data.items():
+                if not isinstance(info, dict):
+                    continue
+
+                name = ""
+                desc = ""
+                entry: dict = {"id": item_id}
+
+                for key, item in info.items():
+                    if isinstance(item, dict) and "Hash" in item:
+                        txt = text_map.get(str(item["Hash"]), "")
+                        if txt:
+                            if "name" in key.lower():
+                                name = txt
+                            elif "desc" in key.lower() or "bgdesc" in key.lower():
+                                desc = txt
+                            else:
+                                entry[key] = txt
+                    else:
+                        entry[key] = item
+
+                if not name or "test" in str(name).lower():
+                    continue
+
+                entry["name"] = name
+                if desc:
+                    entry["desc"] = desc
+
+                items.append(entry)
+
+            if items:
+                out_path = os.path.join(output_dir, f"{category}_{self.lang}.jsonl")
+                with open(out_path, "w", encoding="utf-8") as f:
+                    for item in items:
+                        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                result[category] = out_path
+
+        if not result:
+            raise ValueError("No misc entries were extracted from available source files")
+
+        return result

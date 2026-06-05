@@ -173,14 +173,19 @@ def pipeline(
         _convert_quests = convert_quests
         _convert_talks = convert_talks
         _convert_avatars = convert_avatars
+        _convert_misc = convert_misc
         if game == "starrail":
             from hoyo_story.convert import (
+                convert_starrail_avatars,
+                convert_starrail_misc,
                 convert_starrail_quests,
                 convert_starrail_talks,
             )
 
             _convert_quests = convert_starrail_quests
             _convert_talks = convert_starrail_talks
+            _convert_avatars = convert_starrail_avatars
+            _convert_misc = convert_starrail_misc
 
         pipelines = {
             "quests": (extractor.extract_quests, _convert_quests),
@@ -201,7 +206,7 @@ def pipeline(
             results = extractor.extract_misc(f"{output_dir}/misc_jsonl")
             for category, jp in results.items():
                 typer.echo(f"[misc/{category}] Converting...")
-                n = len(convert_misc(jp, f"{output_dir}/misc/{category}"))
+                n = len(_convert_misc(jp, f"{output_dir}/misc/{category}"))
                 typer.echo(f"  ✓ {n} files → {output_dir}/misc/{category}")
             typer.echo("✓ All done")
         elif kind in pipelines:
@@ -216,7 +221,7 @@ def pipeline(
             results = extractor.extract_misc(f"{output_dir}/jsonl")
             for category, jp in results.items():
                 typer.echo(f"[2/2] Converting {category}...")
-                n = len(convert_misc(jp, f"{output_dir}/{category}"))
+                n = len(_convert_misc(jp, f"{output_dir}/{category}"))
                 typer.echo(f"  ✓ {n} files → {output_dir}/{category}")
         else:
             raise typer.BadParameter(f"Unknown type: {kind}")
