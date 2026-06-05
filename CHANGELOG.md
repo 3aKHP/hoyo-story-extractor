@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] — 2026-06-05
+
+### Added
+
+- **Starrail (Honkai: Star Rail) full extraction pipeline** — Phase 5 complete
+  - `extract/starrail.py`: `StarrailExtractor` with `get_stable_hash()` algorithm,
+    `load_text_map()`, `_load_talk_sentence_map()`, `extract_quests()`,
+    `extract_talks()` (with `_parse_on_sequence()` / `_merge_sessions()`),
+    `extract_avatars()`, `extract_misc()`
+  - `convert.py`: `convert_starrail_quests()`, `convert_starrail_talks()`,
+    `convert_starrail_avatars()`, `convert_starrail_misc()`
+  - `fetch.py`: expanded `STARRAIL_PATHS` covering TextMap, ExcelOutput,
+    and Config/Level directories
+  - `cli.py`: `starrail` registered in `IMPLEMENTED_GAMES` and `_get_extractor()`,
+    game-specific converter selection in `pipeline`
+  - 26 new unit tests covering stable hash, TextMap merge, TalkSentenceConfig
+    loading, quest/talk/avatar/misc extraction + conversion, and pipeline smoke
+
+### Changed
+
+- `test_cli.py`: `test_unimplemented_game_is_rejected_without_traceback` now
+  uses `zzz` instead of `starrail` (since starrail is now implemented)
+
 ## [0.1.0] — 2026-06-05
 
 ### Added

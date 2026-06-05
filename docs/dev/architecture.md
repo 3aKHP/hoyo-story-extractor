@@ -71,7 +71,13 @@ BaseExtractor (base.py)
     │   - quest_data_path: BinOutput/CodexQuest
     │   - extract_talks(), extract_avatars(), extract_misc()
     │
-    ├── StarrailExtractor (starrail.py) — Phase 5
+    ├── StarrailExtractor (starrail.py) — Phase 5 ✅
+    │   - text_map_paths: TextMap + TextMapMain (single table, no Medium split)
+    │   - stable hash: string → 32-bit hash for ExcelOutput field lookup
+    │   - TalkSentenceConfig.json: TalkSentenceID → speaker/content hash mapping
+    │   - quest_data: ExcelOutput/MainMission + SubMission + MissionChapterConfig
+    │   - talk_data: Config/Level/{Mission,Story,TrainVisitor,Activity,Message}/
+    │   - extract_quests(), extract_talks(), extract_avatars(), extract_misc()
     │
     └── ZZZExtractor (zzz.py) — Phase 6
 ```
@@ -81,12 +87,78 @@ BaseExtractor (base.py)
 **职责**：将 JSONL 格式化为人类可读的 Markdown `.txt`
 
 每种数据类型有独立的转换函数：
-- `convert_quests()` — 按 quest 分文件，含标题/章节/子任务/对话
-- `convert_talks()` — 按 Talk 类型分目录，含说话人/对话
-- `convert_avatars()` — 按角色分文件，含资料/语音/故事
-- `convert_misc()` — 按条目分文件，含描述/技能/背景故事
+- `convert_quests()` / `convert_starrail_quests()` — 按 quest/mission 分文件
+- `convert_talks()` / `convert_starrail_talks()` — 按 Talk 类型或来源类型分目录
+- `convert_avatars()` / `convert_starrail_avatars()` — 按角色分文件
+- `convert_misc()` / `convert_starrail_misc()` — 按条目分文件
 
-## TextMap 合并策略
+## 星铁 TextMap 与哈希方案
+
+星铁使用**单表 TextMap**（`TextMap{lang}.json` + `TextMapMain{lang}.json`），无 Medium 分拆。直接合并即可：
+
+```python
+text_map = merge_text_maps([
+    "TextMap/TextMapCHS.json",       # 主文本 (~? entries)
+    "TextMap/TextMapMainCHS.json",   # 补充文本
+])
+```
+
+**stable hash**：部分 ExcelOutput 字段（如 `MissionChapterConfig` 中的章节名）的值是字符串，其 stable hash 作为 TextMap key。算法为社区参考实现（mrzjy/StarrailDialog）：
+
+```python
+def get_stable_hash(s: str) -> int:
+    hash1 = hash2 = 5381
+    i = 0
+    while i < len(s) and s[i] != '\0':
+        hash1 = ((hash1 << 5) + hash1) ^ ord(s[i])
+        if i == len(s) - 1 or s[i + 1] == '\0':
+            break
+        hash2 = ((hash2 << 5) + hash2) ^ ord(s[i + 1])
+        i += 2
+    return (hash1 + (hash2 * 1566083941)) & 0xFFFFFFFF
+```
+
+**TalkSentenceConfig**：对话不直接嵌在剧情 JSON 中，而是通过 `TalkSentenceID` 间接引用：
+
+```python
+# TalkSentenceConfig.json
+{
+    "50001": {
+        "TextmapTalkSentenceName": {"Hash": 100},
+        "TalkSentenceText": {"Hash": 200}
+    }
+}
+```
+
+提取时先加载 `TalkSentenceConfig`，再通过 ID 查找说话人名称和内容哈希。
+
+## 星铁对话序列结构
+
+星铁剧情 JSON（`Config/Level/` 下的 `.json`）使用**序列化 TaskList**：
+
+```json
+{
+    "OnStartSequece": [
+        {
+            "TaskList": [
+                {"$type": "RPG.GameCore.PlayAndWaitSimpleTalk", "SimpleTalkList": [...]},
+                {"$type": "RPG.GameCore.PlayOptionTalk", "OptionList": [...]},
+                {"$type": "RPG.GameCore.WaitCustomString", "CustomString": {"Value": "TalkSentence_50003"}},
+                {"$type": "RPG.GameCore.EndPerformance"}
+            ]
+        }
+    ]
+}
+```
+
+解析流程：
+1. `_parse_on_sequence()` 遍历 `TaskList`，按 `$type` 分发处理
+2. `_get_speaker_content()` 通过 `TalkSentenceID` 查 `TalkSentenceConfig` + TextMap
+3. `_merge_sessions()` 去除 `WaitCustomString` 与 `PlayAndWaitSimpleTalk` 的重复
+
+## TextMap 合并策略（原神）
+
+原神需要合并两套 TextMap：
 
 原神需要合并两套 TextMap：
 

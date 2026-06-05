@@ -13,10 +13,10 @@
 | 游戏 | 状态 |
 |------|:---:|
 | 原神（Genshin Impact） | ✅ Phase 1 — 可用的 |
-| 星穹铁道（Honkai: Star Rail） | 🔜 Phase 5 |
+| 星穹铁道（Honkai: Star Rail） | ✅ Phase 5 — 可用的 |
 | 绝区零（Zenless Zone Zero） | 🔜 Phase 6 |
 
-当前公开 CLI 只支持 `genshin`。星穹铁道和绝区零模块保留为后续阶段代码桩。
+当前公开 CLI 支持 `genshin` 和 `starrail`。绝区零模块保留为后续阶段代码桩。
 
 ---
 
