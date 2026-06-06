@@ -24,7 +24,7 @@ uv run hoyo-extract fetch <game> <target_dir> [--proxy URL]
 ```
 
 **参数**：
-- `game`：游戏标识符（当前支持 `genshin`）
+- `game`：游戏标识符（当前支持 `genshin` / `starrail`）
 - `target_dir`：clone 目标目录（必须不存在）
 
 **示例**：
@@ -111,6 +111,10 @@ uv run hoyo-extract pipeline <game> <repo> <output_dir> [--lang LANG] [--type TY
 
 **参数**：同 `extract` + `convert` 的合并。
 
+`pipeline` 的 `<output_dir>` 是产品根目录：`--type all` 和单类
+`--type quests` / `talks` / `avatars` 都会写入 `<output_dir>/<type>/`，
+`--type misc` 会写入 `<output_dir>/misc/<category>/`。
+
 **示例**：
 
 ```bash
@@ -118,7 +122,7 @@ uv run hoyo-extract pipeline <game> <repo> <output_dir> [--lang LANG] [--type TY
 uv run hoyo-extract pipeline genshin ./genshin_raw ./output --lang CHS --type all
 
 # 单类
-uv run hoyo-extract pipeline genshin ./genshin_raw ./quests --type quests
+uv run hoyo-extract pipeline genshin ./genshin_raw ./output --type quests
 ```
 
 ---

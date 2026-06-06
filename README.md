@@ -56,7 +56,7 @@ uv sync --extra dev
 uv run hoyo-extract pipeline genshin ./genshin_raw ./output --lang CHS --type all
 
 # 只提取任务剧情
-uv run hoyo-extract pipeline genshin ./genshin_raw ./quests --type quests
+uv run hoyo-extract pipeline genshin ./genshin_raw ./output --type quests
 
 # 分步执行
 uv run hoyo-extract extract genshin ./genshin_raw --type talks -o talks.jsonl
@@ -87,13 +87,13 @@ hoyo-story-extractor/              ← 提取引擎（纯 Python，不含游戏�
 │   ├── extract/
 │   │   ├── base.py                ← 公共提取逻辑（递归哈希替换）
 │   │   ├── genshin.py             ← 原神特化（v6.6 适配）
-│   │   ├── starrail.py            ← 星铁桩（Phase 5）
+│   │   ├── starrail.py            ← 星铁特化（Phase 5）
 │   │   └── zzz.py                 ← 绝区零桩（Phase 6）
 │   ├── convert.py                 ← JSONL → .txt 转换器
 │   └── cli.py                     ← typer CLI（hoyo-extract）
 ├── scripts/
 │   └── clone_genshin_raw.ps1      ← Windows sparse-clone 辅助脚本
-├── tests/                         ← 45 个单元测试
+├── tests/                         ← 单元测试
 ├── .github/workflows/             ← CI
 ├── pyproject.toml
 └── README.md

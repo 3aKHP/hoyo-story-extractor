@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from hoyo_story.extract.base import (
@@ -42,6 +43,8 @@ def _escape_filename(name: str) -> str:
     name = str(name)
     for ch in r'\/:*?"<>|':
         name = name.replace(ch, "_")
+    # Strip control characters (newlines, tabs, etc.) that are invalid in filenames
+    name = "".join(c for c in name if ord(c) >= 32)
     return name.strip()[:100]
 
 
@@ -50,6 +53,69 @@ def _get_text(obj: object, key: str = TEXT_KEY) -> str:
         val = obj.get(key, "")
         return str(val) if val else ""
     return ""
+
+
+_RUBY_RE = re.compile(r"\{RUBY_B#[^}]*\}(.*?)\{RUBY_E#\}")
+
+
+def _clean_starrail_text(value: object) -> str:
+    """Clean Star Rail text into reader-facing plain text."""
+    if not isinstance(value, str):
+        return ""
+    text = value.replace("\\n", "\n")
+    text = _RUBY_RE.sub(r"\1", text)
+    for marker in ("<i>", "</i>", "<unbreak>", "</unbreak>"):
+        text = text.replace(marker, "")
+    return text.strip()
+
+
+def _append_starrail_session_lines(lines: list[str], sessions: list[list[dict]]) -> None:
+    """Append Star Rail dialogue sessions in the same readable style as talks."""
+    for session in sessions:
+        for item in session:
+            itype = item.get("type", "")
+
+            if itype == "RPG.GameCore.PlayAndWaitSimpleTalk":
+                for conv in item.get("conversations", []):
+                    role = _clean_starrail_text(conv.get("role", ""))
+                    content = _clean_starrail_text(conv.get("content", ""))
+                    if content:
+                        if role:
+                            lines.append(f"**{role}**：{content}")
+                        else:
+                            lines.append(content)
+
+            elif itype == "RPG.GameCore.PlayOptionTalk":
+                lines.append("")
+                for opt in item.get("options", []):
+                    role = _clean_starrail_text(opt.get("role", ""))
+                    content = _clean_starrail_text(opt.get("content", ""))
+                    if content:
+                        lines.append(f"> {role}：{content}")
+                lines.append("")
+
+            elif itype in (
+                "RPG.GameCore.WaitCustomString",
+                "RPG.GameCore.TriggerCustomString",
+            ):
+                role = _clean_starrail_text(item.get("role", ""))
+                content = _clean_starrail_text(item.get("content", ""))
+                if content:
+                    if role:
+                        lines.append(f"**{role}**：{content}")
+                    else:
+                        lines.append(content)
+
+        lines.append("")
+
+
+def _format_starrail_rarity(value: object) -> str:
+    """Format Star Rail enum-like rarity values for readers."""
+    text = _clean_starrail_text(value)
+    match = re.search(r"CombatPowerAvatarRarityType(\d+)$", text)
+    if match:
+        return f"{match.group(1)}星"
+    return text
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -396,7 +462,7 @@ def convert_starrail_quests(jsonl_path: str, output_dir: str) -> list[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[str] = []
-    count = 0
+    entry_count = 0
 
     with open(jsonl_path, encoding="utf-8") as fh:
         for line in fh:
@@ -408,17 +474,20 @@ def convert_starrail_quests(jsonl_path: str, output_dir: str) -> list[str]:
             except json.JSONDecodeError:
                 continue
 
-            count += 1
+            entry_count += 1
             mission = entry.get("mission", {})
-            name = mission.get("name", f"mission_{count}")
+            mission_id = mission.get("id", entry_count)
+            name = _clean_starrail_text(mission.get("name", ""))
+            if not name:
+                name = f"mission_{mission_id}"
             chapter = mission.get("chapter", {})
 
             lines: list[str] = [f"# {name}", ""]
 
             # Chapter info
             if chapter:
-                chapter_name = chapter.get("ChapterName", "")
-                stage_name = chapter.get("StageName", "")
+                chapter_name = _clean_starrail_text(chapter.get("ChapterName", ""))
+                stage_name = _clean_starrail_text(chapter.get("StageName", ""))
                 if chapter_name and stage_name:
                     lines.append(f"> {chapter_name} {stage_name}")
                 elif chapter_name:
@@ -428,21 +497,24 @@ def convert_starrail_quests(jsonl_path: str, output_dir: str) -> list[str]:
             # Submissions
             submissions: list[dict] = entry.get("submissions", [])
             for sub in submissions:
-                target = sub.get("target", "")
-                desc = sub.get("desc", "")
+                target = _clean_starrail_text(sub.get("target", ""))
+                desc = _clean_starrail_text(sub.get("desc", ""))
                 if target:
                     lines.append(f"### {target}")
                     lines.append("")
                 if desc:
                     lines.append(desc)
                     lines.append("")
+                sessions = sub.get("sessions", [])
+                if sessions:
+                    _append_starrail_session_lines(lines, sessions)
 
             if len(lines) <= 2:
-                lines.append("(empty mission)")
+                continue
 
             content = "\n".join(lines)
             safe_name = _escape_filename(name)
-            fpath = out_dir / f"{count:04d}_{safe_name}.txt"
+            fpath = out_dir / f"{len(written) + 1:04d}_{safe_name}.txt"
             fpath.write_text(content, encoding="utf-8")
             written.append(str(fpath))
 
@@ -483,42 +555,7 @@ def convert_starrail_talks(jsonl_path: str, output_dir: str) -> list[str]:
 
             lines: list[str] = [f"# {stype} {file_name}", ""]
 
-            for session in sessions:
-                for item in session:
-                    itype = item.get("type", "")
-
-                    if itype == "RPG.GameCore.PlayAndWaitSimpleTalk":
-                        for conv in item.get("conversations", []):
-                            role = conv.get("role", "")
-                            content = conv.get("content", "")
-                            if content:
-                                if role:
-                                    lines.append(f"**{role}**：{content}")
-                                else:
-                                    lines.append(content)
-
-                    elif itype == "RPG.GameCore.PlayOptionTalk":
-                        lines.append("")
-                        for opt in item.get("options", []):
-                            role = opt.get("role", "")
-                            content = opt.get("content", "")
-                            if content:
-                                lines.append(f"> {role}：{content}")
-                        lines.append("")
-
-                    elif itype in (
-                        "RPG.GameCore.WaitCustomString",
-                        "RPG.GameCore.TriggerCustomString",
-                    ):
-                        role = item.get("role", "")
-                        content = item.get("content", "")
-                        if content:
-                            if role:
-                                lines.append(f"**{role}**：{content}")
-                            else:
-                                lines.append(content)
-
-                lines.append("")
+            _append_starrail_session_lines(lines, sessions)
 
             if len(lines) <= 2:
                 continue
@@ -542,6 +579,7 @@ def convert_starrail_avatars(jsonl_path: str, output_dir: str) -> list[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[str] = []
+    count = 0
     with open(jsonl_path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -552,27 +590,103 @@ def convert_starrail_avatars(jsonl_path: str, output_dir: str) -> list[str]:
             except json.JSONDecodeError:
                 continue
 
-            name = avatar.get("name", "")
+            name = _clean_starrail_text(avatar.get("name", ""))
             if not name:
                 continue
 
+            desc = _clean_starrail_text(avatar.get("AvatarDesc", ""))
+            stories = avatar.get("stories", [])
+            voices = avatar.get("voices", [])
+            has_story = isinstance(stories, list) and any(
+                isinstance(story, dict) and _clean_starrail_text(story.get("content", ""))
+                for story in stories
+            )
+            has_voice = isinstance(voices, list) and any(
+                isinstance(voice, dict) and _clean_starrail_text(voice.get("content", ""))
+                for voice in voices
+            )
+            if not desc and not has_story and not has_voice:
+                continue
+
+            count += 1
+
             lines: list[str] = [f"# {name}", ""]
 
-            # Basic info fields
-            for key, val in avatar.items():
-                if key in ("id", "name"):
-                    continue
-                if isinstance(val, str) and val:
-                    lines.append(f"- **{key}**: {val}")
-                elif isinstance(val, (int, float)) and not isinstance(val, bool):
-                    lines.append(f"- **{key}**: {val}")
+            if desc:
+                lines.append(desc)
+                lines.append("")
+
+            # Keep only reader-facing summary fields, not raw asset/config paths.
+            summary_fields = [
+                ("属性", "DamageType"),
+                ("命途", "AvatarBaseTypeName"),
+                ("稀有度", "Rarity"),
+                ("阵营", "Camp"),
+                ("来源", "Comefrom"),
+            ]
+            for label, key in summary_fields:
+                if key == "Rarity":
+                    val = _format_starrail_rarity(avatar.get(key, ""))
+                else:
+                    val = _clean_starrail_text(avatar.get(key, ""))
+                if val:
+                    lines.append(f"- **{label}**: {val}")
+
+            if not avatar.get("AvatarBaseTypeName"):
+                base_type = _clean_starrail_text(avatar.get("AvatarBaseType", ""))
+                if base_type:
+                    lines.append(f"- **命途**: {base_type}")
+
+            cv = avatar.get("cv", {})
+            if isinstance(cv, dict):
+                for key, label in (
+                    ("CV_CN", "中文 CV"),
+                    ("CV_JP", "日文 CV"),
+                    ("CV_KR", "韩文 CV"),
+                    ("CV_EN", "英文 CV"),
+                ):
+                    val = _clean_starrail_text(cv.get(key, ""))
+                    if val:
+                        lines.append(f"- **{label}**: {val}")
 
             if len(lines) > 2:
                 lines.append("")
 
+            if isinstance(stories, list) and stories:
+                lines.append("## 档案")
+                lines.append("")
+                for story in stories:
+                    if not isinstance(story, dict):
+                        continue
+                    title = _clean_starrail_text(story.get("title", ""))
+                    content = _clean_starrail_text(story.get("content", ""))
+                    if not content:
+                        continue
+                    if title:
+                        lines.append(f"### {title}")
+                        lines.append("")
+                    lines.append(content)
+                    lines.append("")
+
+            if isinstance(voices, list) and voices:
+                lines.append("## 语音")
+                lines.append("")
+                for voice in voices:
+                    if not isinstance(voice, dict):
+                        continue
+                    title = _clean_starrail_text(voice.get("title", ""))
+                    content = _clean_starrail_text(voice.get("content", ""))
+                    if not content:
+                        continue
+                    if title:
+                        lines.append(f"**{title}**：{content}")
+                    else:
+                        lines.append(content)
+                    lines.append("")
+
             content = "\n".join(lines)
             safe_name = _escape_filename(name)
-            fpath = out_dir / f"{safe_name}.txt"
+            fpath = out_dir / f"{count:04d}_{safe_name}.txt"
             fpath.write_text(content, encoding="utf-8")
             written.append(str(fpath))
 
@@ -589,7 +703,7 @@ def convert_starrail_misc(jsonl_path: str, output_dir: str) -> list[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[str] = []
-    count = 0
+    entry_count = 0
     with open(jsonl_path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -600,20 +714,23 @@ def convert_starrail_misc(jsonl_path: str, output_dir: str) -> list[str]:
             except json.JSONDecodeError:
                 continue
 
-            count += 1
-            name = item.get("name", f"item_{count}")
+            entry_count += 1
+            name = _clean_starrail_text(item.get("name", ""))
+            if not name:
+                name = f"item_{entry_count}"
+
+            desc = _clean_starrail_text(item.get("desc", ""))
+            if not desc:
+                continue
+
             lines: list[str] = [f"# {name}", ""]
+            lines.append(desc)
+            lines.append("")
 
-            desc = item.get("desc", "")
-            if desc:
-                lines.append(desc)
-                lines.append("")
-
-            # Other text fields
-            for key, val in item.items():
-                if key in ("id", "name", "desc"):
-                    continue
-                if isinstance(val, str) and val:
+            # Keep compact metadata that helps filtering without exposing asset paths.
+            for key in ("ItemMainType", "ItemSubType", "Rarity"):
+                val = _clean_starrail_text(item.get(key, ""))
+                if val:
                     lines.append(f"- **{key}**: {val}")
 
             if len(lines) > 2:
@@ -621,7 +738,7 @@ def convert_starrail_misc(jsonl_path: str, output_dir: str) -> list[str]:
 
             content = "\n".join(lines)
             safe_name = _escape_filename(name)
-            fpath = out_dir / f"{count:04d}_{safe_name}.txt"
+            fpath = out_dir / f"{len(written) + 1:04d}_{safe_name}.txt"
             fpath.write_text(content, encoding="utf-8")
             written.append(str(fpath))
 

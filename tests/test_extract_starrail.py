@@ -73,6 +73,25 @@ class TestStarrailExtractor:
         result = ext.load_text_map()
         assert result == {"1": "对话内容", "2": "角色名"}
 
+    def test_load_text_map_supports_split_language_maps(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        textmap_dir = repo / "TextMap"
+        textmap_dir.mkdir(parents=True)
+
+        textmap_dir.joinpath("TextMapKR_0.json").write_text(
+            json.dumps({"1": "대사"}, ensure_ascii=False), encoding="utf-8"
+        )
+        textmap_dir.joinpath("TextMapKR_1.json").write_text(
+            json.dumps({"2": "이름"}, ensure_ascii=False), encoding="utf-8"
+        )
+        textmap_dir.joinpath("TextMapMainKR.json").write_text(
+            json.dumps({"3": "메인"}, ensure_ascii=False), encoding="utf-8"
+        )
+
+        ext = StarrailExtractor(str(repo), lang="KR")
+        result = ext.load_text_map()
+        assert result == {"1": "대사", "2": "이름", "3": "메인"}
+
     def test_load_talk_sentence_map(self, tmp_path: Path) -> None:
         """验证 TalkSentenceConfig.json 被正确加载."""
         repo = tmp_path / "repo"
@@ -117,6 +136,8 @@ class TestStarrailExtractor:
                     "123": "风暴之眼",      # MainMission Name
                     "456": "离开看看外面",   # SubMission TargetText
                     "789": "你移开视线...",  # SubMission DescrptionText
+                    "1000": "三月七",
+                    "2000": "走吧。",
                 },
                 ensure_ascii=False,
             ),
@@ -166,15 +187,62 @@ class TestStarrailExtractor:
             ),
             encoding="utf-8",
         )
+        excel.joinpath("TalkSentenceConfig.json").write_text(
+            json.dumps(
+                {
+                    "50001": {
+                        "TextmapTalkSentenceName": {"Hash": 1000},
+                        "TalkSentenceText": {"Hash": 2000},
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
 
-        # MissionInfo (hierarchy)
+        # MissionInfo (real TurnBasedGameData hierarchy)
         mission_dir = repo / "Config" / "Level" / "Mission" / "10001"
         mission_dir.mkdir(parents=True)
         mission_dir.joinpath("MissionInfo_10001.json").write_text(
             json.dumps(
                 {
                     "MainMissionID": 10001,
-                    "SubMissionList": [{"ID": 100020104}],
+                    "StartSubMissionList": [100020104],
+                    "FinishSubMissionList": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        mission_dir.joinpath("MissionInfo_10001.partial.json").write_text(
+            json.dumps(
+                {
+                    "SubMissionList": [
+                        {
+                            "ID": 100020104,
+                            "MissionJsonPath": (
+                                "Config/Level/Mission/10001/Mission_100020104.json"
+                            ),
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        mission_dir.joinpath("Mission_100020104.json").write_text(
+            json.dumps(
+                {
+                    "OnStartSequece": [
+                        {
+                            "TaskList": [
+                                {
+                                    "$type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                                    "SimpleTalkList": [{"TalkSentenceID": 50001}],
+                                },
+                            ]
+                        }
+                    ]
                 },
                 ensure_ascii=False,
             ),
@@ -197,6 +265,8 @@ class TestStarrailExtractor:
         assert entry["submissions"][0]["target"] == "离开看看外面"
         assert entry["submissions"][0]["desc"] == "你移开视线..."
         assert entry["submissions"][0]["ids"] == ["100020104"]
+        assert entry["submissions"][0]["sessions"][0][0]["conversations"][0]["role"] == "三月七"
+        assert entry["submissions"][0]["sessions"][0][0]["conversations"][0]["content"] == "走吧。"
 
 
 class TestConvertStarrailQuests:
@@ -214,7 +284,21 @@ class TestConvertStarrailQuests:
                         "chapter": {"ChapterName": "第一章", "StageName": "第一幕"},
                     },
                     "submissions": [
-                        {"ids": ["1"], "target": "离开看看外面", "desc": "你移开视线..."}
+                        {
+                            "ids": ["1"],
+                            "target": "离开看看外面",
+                            "desc": "你移开视线...",
+                            "sessions": [
+                                [
+                                    {
+                                        "type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                                        "conversations": [
+                                            {"role": "三月七", "content": "走吧。"}
+                                        ],
+                                    }
+                                ]
+                            ],
+                        }
                     ],
                 },
                 ensure_ascii=False,
@@ -232,8 +316,9 @@ class TestConvertStarrailQuests:
         assert "> 第一章 第一幕" in content
         assert "### 离开看看外面" in content
         assert "你移开视线..." in content
+        assert "**三月七**：走吧。" in content
 
-    def test_empty_mission(self, tmp_path: Path) -> None:
+    def test_empty_mission_is_skipped(self, tmp_path: Path) -> None:
         from hoyo_story.convert import convert_starrail_quests
 
         jsonl = tmp_path / "quests.jsonl"
@@ -249,10 +334,32 @@ class TestConvertStarrailQuests:
         out_dir = tmp_path / "out"
         files = convert_starrail_quests(str(jsonl), str(out_dir))
 
+        assert files == []
+        assert list(out_dir.glob("*.txt")) == []
+
+    def test_unresolved_mission_name_uses_id_fallback(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_quests
+
+        jsonl = tmp_path / "quests.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "mission": {"id": "10001", "name": {"Hash": 123}},
+                    "submissions": [{"target": "离开看看外面", "desc": ""}],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_quests(str(jsonl), str(out_dir))
+
         assert len(files) == 1
-        content = Path(files[0]).read_text(encoding="utf-8")
-        assert "# 空任务" in content
-        assert "(empty mission)" in content
+        path = Path(files[0])
+        assert path.name == "0001_mission_10001.txt"
+        assert "# mission_10001" in path.read_text(encoding="utf-8")
 
 
 class TestExtractTalks:
@@ -299,10 +406,10 @@ class TestExtractTalks:
             encoding="utf-8",
         )
 
-        # Story JSON with OnStartSequece
-        story_dir = repo / "Config" / "Level" / "Story"
+        # Story discussion JSON with OnStartSequece
+        story_dir = repo / "Story" / "Discussion" / "Mission" / "10001"
         story_dir.mkdir(parents=True)
-        story_dir.joinpath("Story_10001.json").write_text(
+        story_dir.joinpath("DS100010101.json").write_text(
             json.dumps(
                 {
                     "OnStartSequece": [
@@ -344,8 +451,8 @@ class TestExtractTalks:
         assert len(lines) == 1
 
         entry = json.loads(lines[0])
-        assert entry["_source_type"] == "Story"
-        assert entry["_source_file"] == "Story_10001.json"
+        assert entry["_source_type"] == "Quest"
+        assert entry["_source_file"] == "DS100010101.json"
 
         sessions = entry["sessions"]
         assert len(sessions) == 1
@@ -393,9 +500,9 @@ class TestExtractTalks:
             encoding="utf-8",
         )
 
-        story_dir = repo / "Config" / "Level" / "Story"
+        story_dir = repo / "Story" / "Discussion" / "Mission" / "10002"
         story_dir.mkdir(parents=True)
-        story_dir.joinpath("Story_10002.json").write_text(
+        story_dir.joinpath("DS100020101.json").write_text(
             json.dumps(
                 {
                     "OnStartSequece": [
@@ -431,6 +538,123 @@ class TestExtractTalks:
         assert len(session) == 2
         assert session[0]["type"] == "RPG.GameCore.PlayAndWaitSimpleTalk"
         assert session[1]["type"] == "RPG.GameCore.EndPerformance"
+
+    def test_mission_act_talks_are_classified_as_quest(self, tmp_path: Path) -> None:
+        """Mission/<id>/Act 对话应归入接近原神的 Quest 分类."""
+        repo = tmp_path / "repo"
+
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps({"100": "三月七", "200": "走吧。"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("TalkSentenceConfig.json").write_text(
+            json.dumps(
+                {
+                    "50001": {
+                        "TextmapTalkSentenceName": {"Hash": 100},
+                        "TalkSentenceText": {"Hash": 200},
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        act_dir = repo / "Config" / "Level" / "Mission" / "10001" / "Act"
+        act_dir.mkdir(parents=True)
+        act_dir.joinpath("Act10001.json").write_text(
+            json.dumps(
+                {
+                    "OnStartSequece": [
+                        {
+                            "TaskList": [
+                                {
+                                    "$type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                                    "SimpleTalkList": [{"TalkSentenceID": 50001}],
+                                },
+                                {"$type": "RPG.GameCore.EndPerformance"},
+                            ]
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out = tmp_path / "talks_CHS.jsonl"
+        ext.extract_talks(str(out))
+
+        entry = json.loads(out.read_text(encoding="utf-8").strip())
+        assert entry["_source_type"] == "Quest"
+
+    def test_rogue_dialogue_play_simple_talk_is_extracted(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        repo = tmp_path / "repo"
+
+        tm = repo / "TextMap"
+        tm.mkdir(parents=True)
+        tm.joinpath("TextMapCHS.json").write_text(
+            json.dumps({"100": "黑塔", "200": "模拟宇宙启动。"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tm.joinpath("TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+        excel = repo / "ExcelOutput"
+        excel.mkdir(parents=True)
+        excel.joinpath("TalkSentenceConfig.json").write_text(
+            json.dumps(
+                {
+                    "9001": {
+                        "TextmapTalkSentenceName": {"Hash": 100},
+                        "TalkSentenceText": {"Hash": 200},
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        rogue_dir = repo / "Config" / "Level" / "RogueDialogue" / "82101"
+        rogue_dir.mkdir(parents=True)
+        rogue_dir.joinpath("821010001.json").write_text(
+            json.dumps(
+                {
+                    "OnStartSequece": [
+                        {
+                            "TaskList": [
+                                {
+                                    "$type": "RPG.GameCore.PlaySimpleTalk",
+                                    "SimpleTalkList": [{"TalkSentenceID": 9001}],
+                                },
+                                {"$type": "RPG.GameCore.EndPerformance"},
+                            ]
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        ext = StarrailExtractor(str(repo))
+        out = tmp_path / "talks_CHS.jsonl"
+        ext.extract_talks(str(out))
+
+        entry = json.loads(out.read_text(encoding="utf-8").strip())
+        assert entry["_source_type"] == "Rogue"
+        conv = entry["sessions"][0][0]["conversations"][0]
+        assert conv["role"] == "黑塔"
+        assert conv["content"] == "模拟宇宙启动。"
 
 
 class TestConvertStarrailTalks:
@@ -503,14 +727,25 @@ class TestExtractAvatars:
     """StarrailExtractor.extract_avatars 的测试."""
 
     def test_extract_avatars_end_to_end(self, tmp_path: Path) -> None:
-        """完整流程：TextMap + AvatarConfig → JSONL."""
+        """完整流程：TextMap + AvatarConfig + atlas/profile/voice → JSONL."""
         repo = tmp_path / "repo"
 
         tm = repo / "TextMap"
         tm.mkdir(parents=True)
         tm.joinpath("TextMapCHS.json").write_text(
             json.dumps(
-                {"100": "三月七", "200": "冰属性角色"},
+                {
+                    "100": "三月七",
+                    "200": "冰属性角色",
+                    "300": "角色详情",
+                    "301": "喜欢拍照的列车乘员。",
+                    "302": "初次见面",
+                    "303": "你好，开拓者。",
+                    "304": "秦且歌",
+                    "305": "星穹列车",
+                    "306": "毁灭",
+                    "307": "角色活动跃迁",
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -527,8 +762,73 @@ class TestExtractAvatars:
                         "AvatarName": {"Hash": 100},
                         "AvatarDesc": {"Hash": 200},
                         "DamageType": "Ice",
+                        "AvatarBaseType": "Warrior",
                     }
                 ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("StoryAtlasTextmap.json").write_text(
+            json.dumps(
+                [{"StoryID": 1, "StoryName": {"Hash": 300}}],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("StoryAtlas.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "AvatarID": 1001,
+                        "StoryID": 1,
+                        "Story": {"Hash": 301},
+                        "Unlock": "Default",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("VoiceAtlas.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "AvatarID": 1001,
+                        "VoiceID": 1,
+                        "VoiceTitle": {"Hash": 302},
+                        "Voice_M": {"Hash": 303},
+                        "SortID": 1,
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("AvatarAtlas.json").write_text(
+            json.dumps(
+                [{"AvatarID": 1001, "CV_CN": {"Hash": 304}, "CampID": 100}],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("AvatarCamp.json").write_text(
+            json.dumps(
+                [{"ID": 100, "Name": {"Hash": 305}}],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("AvatarBaseType.json").write_text(
+            json.dumps(
+                [{"ID": "Warrior", "BaseTypeText": {"Hash": 306}}],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        excel.joinpath("AvatarComefrom.json").write_text(
+            json.dumps(
+                [{"ID": 1001, "Desc": {"Hash": 307}}],
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -546,6 +846,14 @@ class TestExtractAvatars:
         assert avatar["name"] == "三月七"
         assert avatar["AvatarDesc"] == "冰属性角色"
         assert avatar["DamageType"] == "Ice"
+        assert avatar["AvatarBaseTypeName"] == "毁灭"
+        assert avatar["Camp"] == "星穹列车"
+        assert avatar["Comefrom"] == "角色活动跃迁"
+        assert avatar["cv"]["CV_CN"] == "秦且歌"
+        assert avatar["stories"][0]["title"] == "角色详情"
+        assert avatar["stories"][0]["content"] == "喜欢拍照的列车乘员。"
+        assert avatar["voices"][0]["title"] == "初次见面"
+        assert avatar["voices"][0]["content"] == "你好，开拓者。"
 
     def test_extract_avatars_missing_file_raises(self, tmp_path: Path) -> None:
         ext = StarrailExtractor(str(tmp_path / "repo"))
@@ -636,7 +944,27 @@ class TestConvertStarrailAvatars:
         jsonl = tmp_path / "avatars.jsonl"
         jsonl.write_text(
             json.dumps(
-                {"id": "1001", "name": "三月七", "DamageType": "Ice"},
+                {
+                    "id": "1001",
+                    "name": "三月七",
+                    "AvatarDesc": "冰属性角色\\n来自列车",
+                    "DamageType": "Ice",
+                    "AvatarBaseTypeName": "存护",
+                    "Rarity": "CombatPowerAvatarRarityType4",
+                    "Camp": "星穹列车",
+                    "Comefrom": "角色活动跃迁",
+                    "cv": {"CV_CN": "秦且歌"},
+                    "stories": [
+                        {
+                            "title": "角色详情",
+                            "content": "精灵古怪的少女。\\n<i>喜欢拍照。</i>",
+                        }
+                    ],
+                    "voices": [
+                        {"title": "初次见面", "content": "你好，{NICKNAME}。"}
+                    ],
+                    "JsonPath": "Config/ConfigCharacter/Avatar.json",
+                },
                 ensure_ascii=False,
             )
             + "\n",
@@ -649,7 +977,72 @@ class TestConvertStarrailAvatars:
         assert len(files) == 1
         content = Path(files[0]).read_text(encoding="utf-8")
         assert "# 三月七" in content
-        assert "**DamageType**: Ice" in content
+        assert "冰属性角色\n来自列车" in content
+        assert "**属性**: Ice" in content
+        assert "**命途**: 存护" in content
+        assert "**稀有度**: 4星" in content
+        assert "**阵营**: 星穹列车" in content
+        assert "**中文 CV**: 秦且歌" in content
+        assert "## 档案" in content
+        assert "### 角色详情" in content
+        assert "精灵古怪的少女。\n喜欢拍照。" in content
+        assert "## 语音" in content
+        assert "**初次见面**：你好，{NICKNAME}。" in content
+        assert "JsonPath" not in content
+
+    def test_duplicate_names_do_not_overwrite(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_avatars
+
+        jsonl = tmp_path / "avatars.jsonl"
+        jsonl.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {"id": "8001", "name": "{NICKNAME}", "AvatarDesc": "男主"},
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        {"id": "8002", "name": "{NICKNAME}", "AvatarDesc": "女主"},
+                        ensure_ascii=False,
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_avatars(str(jsonl), str(out_dir))
+
+        assert len(files) == 2
+        assert Path(files[0]).name == "0001_{NICKNAME}.txt"
+        assert Path(files[1]).name == "0002_{NICKNAME}.txt"
+        assert len(list(out_dir.glob("*.txt"))) == 2
+
+    def test_metadata_only_avatar_is_skipped(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_avatars
+
+        jsonl = tmp_path / "avatars.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "id": "8003",
+                    "name": "{NICKNAME}",
+                    "DamageType": "Fire",
+                    "AvatarBaseTypeName": "存护",
+                    "Rarity": "CombatPowerAvatarRarityType5",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_avatars(str(jsonl), str(out_dir))
+
+        assert files == []
+        assert list(out_dir.glob("*.txt")) == []
 
 
 class TestConvertStarrailMisc:
@@ -661,7 +1054,14 @@ class TestConvertStarrailMisc:
         jsonl = tmp_path / "misc.jsonl"
         jsonl.write_text(
             json.dumps(
-                {"id": "2", "name": "信用点", "desc": "星际货币", "Rarity": "Rare"},
+                {
+                    "id": "2",
+                    "name": "信用点",
+                    "desc": "星际货币\\n<i>通用货币</i>",
+                    "Rarity": "Rare",
+                    "ItemIconPath": "SpriteOutput/ItemIcon/2.png",
+                    "ItemBGDesc": "duplicate",
+                },
                 ensure_ascii=False,
             )
             + "\n",
@@ -674,5 +1074,31 @@ class TestConvertStarrailMisc:
         assert len(files) == 1
         content = Path(files[0]).read_text(encoding="utf-8")
         assert "# 信用点" in content
-        assert "星际货币" in content
+        assert "星际货币\n通用货币" in content
         assert "**Rarity**: Rare" in content
+        assert "ItemIconPath" not in content
+        assert "ItemBGDesc" not in content
+
+    def test_item_without_description_is_skipped(self, tmp_path: Path) -> None:
+        from hoyo_story.convert import convert_starrail_misc
+
+        jsonl = tmp_path / "misc.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "id": "23",
+                    "name": "活跃度",
+                    "ItemMainType": "Virtual",
+                    "Rarity": "Rare",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "out"
+        files = convert_starrail_misc(str(jsonl), str(out_dir))
+
+        assert files == []
+        assert list(out_dir.glob("*.txt")) == []

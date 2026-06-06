@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 
-from hoyo_story.extract.base import BaseExtractor
+from hoyo_story.extract.base import BaseExtractor, merge_text_maps
 
 
 def get_stable_hash(s: str) -> int:
@@ -55,11 +55,39 @@ class StarrailExtractor(BaseExtractor):
     """
 
     game_name = "starrail"
+    # NOTE: load_text_map() override handles file discovery via glob;
+    # this attribute is unused at runtime but kept for interface compatibility.
     text_map_paths = [
         "TextMap/TextMap{lang}.json",
         "TextMap/TextMapMain{lang}.json",
     ]
     quest_data_path = ""  # 不适用；星铁任务数据在 ExcelOutput/，完全覆盖 extract_quests
+
+    def load_text_map(self) -> dict[str, str]:
+        """Load Starrail TextMap files, including split language maps."""
+        import glob
+
+        text_map_dir = os.path.join(self.raw_repo_path, "TextMap")
+        base_path = os.path.join(text_map_dir, f"TextMap{self.lang}.json")
+        split_paths = sorted(glob.glob(os.path.join(text_map_dir, f"TextMap{self.lang}_*.json")))
+        main_path = os.path.join(text_map_dir, f"TextMapMain{self.lang}.json")
+
+        paths: list[str] = []
+        if os.path.exists(base_path):
+            paths.append(base_path)
+        paths.extend(split_paths)
+        if os.path.exists(main_path):
+            paths.append(main_path)
+
+        if not paths:
+            raise FileNotFoundError(
+                "Missing TextMap file(s) for "
+                f"{self.game_name} lang={self.lang}: "
+                f"{base_path} or {os.path.join(text_map_dir, f'TextMap{self.lang}_*.json')}, "
+                f"{main_path}"
+            )
+
+        return merge_text_maps(paths)
 
     # ── Talk sentence lookup ─────────────────────────────────────────────
 
@@ -110,6 +138,108 @@ class StarrailExtractor(BaseExtractor):
                 result[key] = item
         return result
 
+    def _collect_mission_submissions(self, mission_info_file: str, info: dict) -> list[dict]:
+        """Collect sub-mission refs from real TurnBasedGameData mission files.
+
+        The primary `MissionInfo_*.json` file only lists start/finish IDs in current
+        raw data. The detailed `SubMissionList` lives in the sibling
+        `MissionInfo_*.partial.json` file.
+        """
+        positions: dict[str, int] = {}
+        refs: list[dict] = []
+
+        def add(raw_id: object, json_path: str = "") -> None:
+            if isinstance(raw_id, dict):
+                json_path = str(raw_id.get("MissionJsonPath", "") or json_path)
+                raw_id = raw_id.get("ID")
+            if raw_id in (None, ""):
+                return
+            sub_id = str(raw_id)
+            if sub_id in positions:
+                ref = refs[positions[sub_id]]
+                if json_path and not ref.get("json_path"):
+                    ref["json_path"] = json_path
+                return
+            positions[sub_id] = len(refs)
+            refs.append({"id": sub_id, "json_path": json_path})
+
+        for sub in info.get("SubMissionList", []):
+            add(sub)
+        for key in ("StartSubMissionList", "FinishSubMissionList"):
+            for sub_id in info.get(key, []):
+                add(sub_id)
+
+        partial_file = mission_info_file.removesuffix(".json") + ".partial.json"
+        if os.path.exists(partial_file):
+            with open(partial_file, encoding="utf-8") as f:
+                try:
+                    partial_info = json.load(f)
+                except json.JSONDecodeError:
+                    partial_info = None
+            if isinstance(partial_info, dict):
+                for sub in partial_info.get("SubMissionList", []):
+                    add(sub)
+
+        return refs
+
+    @staticmethod
+    def _resolved_text(value: object) -> str:
+        """Return only successfully resolved text values."""
+        if isinstance(value, str) and value and value != "N/A":
+            return value
+        return ""
+
+    def _load_optional_excel(self, filename: str) -> list[dict]:
+        """Load an optional ExcelOutput JSON file as a list of dictionaries."""
+        path = os.path.join(self.raw_repo_path, "ExcelOutput", filename)
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as f:
+            try:
+                raw = json.load(f)
+            except json.JSONDecodeError:
+                return []
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        if isinstance(raw, dict):
+            return [item for item in raw.values() if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _sort_key(value: object) -> tuple[int, str]:
+        """Sort mixed numeric/string IDs stably."""
+        text = str(value)
+        try:
+            return int(text), text
+        except ValueError:
+            return 0, text
+
+    def _extract_submission_sessions(
+        self,
+        submission_ref: dict,
+        text_map: dict[str, str],
+        talk_sentence_map: dict[str, dict],
+    ) -> list[list[dict]]:
+        """Extract dialogue sessions referenced by a sub-mission, if present."""
+        json_path = submission_ref.get("json_path", "")
+        if not json_path or not talk_sentence_map:
+            return []
+
+        path = os.path.join(self.raw_repo_path, *str(json_path).split("/"))
+        if not os.path.exists(path):
+            return []
+
+        with open(path, encoding="utf-8") as f:
+            try:
+                info = json.load(f)
+            except json.JSONDecodeError:
+                return []
+
+        return self._merge_sessions(
+            self._parse_on_sequence(info, text_map, talk_sentence_map),
+            require_end=False,
+        )
+
     def extract_quests(self, output_path: str | None = None) -> str:
         """从 ExcelOutput 提取任务层级（missions + submissions）。
 
@@ -128,6 +258,10 @@ class StarrailExtractor(BaseExtractor):
         import glob
 
         text_map = self.load_text_map()
+        try:
+            talk_sentence_map = self._load_talk_sentence_map()
+        except FileNotFoundError:
+            talk_sentence_map = {}
         repo = self.raw_repo_path
 
         # ── 1. Chapter config (list format, uses stable hash on string values) ─
@@ -188,36 +322,59 @@ class StarrailExtractor(BaseExtractor):
         if os.path.isdir(mission_dir):
             pattern = os.path.join(mission_dir, "*", "MissionInfo_*.json")
             for mission_info_file in glob.iglob(pattern):
+                if ".partial" in os.path.basename(mission_info_file):
+                    continue
+
                 with open(mission_info_file, encoding="utf-8") as f:
-                    info = json.load(f)
+                    try:
+                        info = json.load(f)
+                    except json.JSONDecodeError:
+                        continue
 
                 main_id = str(info.get("MainMissionID", ""))
                 if main_id not in mission_map:
                     continue
 
                 mission = mission_map[main_id]
-                name = mission.get("Name", "")
-                if not name or name == "N/A":
-                    continue
+                name = self._resolved_text(mission.get("Name", ""))
+                if not name:
+                    name = f"mission_{main_id}"
 
                 # Collect submissions, deduplicate by text feature
-                seen: dict[str, list[str]] = {}
-                for sub in info.get("SubMissionList", []):
-                    sub_id = str(sub.get("ID", ""))
+                seen: dict[str, dict] = {}
+                for sub_ref in self._collect_mission_submissions(mission_info_file, info):
+                    sub_id = sub_ref["id"]
                     if sub_id not in submission_map:
                         continue
                     submission = submission_map[sub_id]
-                    target = str(submission.get("TargetText", ""))
-                    desc = str(submission.get("DescrptionText", ""))
-                    if not target or target == "N/A":
+                    target = self._resolved_text(submission.get("TargetText", ""))
+                    desc = self._resolved_text(submission.get("DescrptionText", ""))
+                    if not target:
                         continue
                     feature = f"{target}|||{desc}"
-                    seen.setdefault(feature, []).append(sub_id)
+                    entry = seen.setdefault(
+                        feature,
+                        {"ids": [], "target": target, "desc": desc, "sessions": []},
+                    )
+                    entry["ids"].append(sub_id)
+                    sessions = self._extract_submission_sessions(
+                        sub_ref,
+                        text_map,
+                        talk_sentence_map,
+                    )
+                    if sessions:
+                        entry["sessions"].extend(sessions)
 
                 submissions = []
-                for feature, ids in seen.items():
-                    target, desc = feature.split("|||", 1)
-                    submissions.append({"ids": ids, "target": target, "desc": desc})
+                for entry in seen.values():
+                    submission_entry = {
+                        "ids": entry["ids"],
+                        "target": entry["target"],
+                        "desc": entry["desc"],
+                    }
+                    if entry["sessions"]:
+                        submission_entry["sessions"] = entry["sessions"]
+                    submissions.append(submission_entry)
 
                 chapter_id = str(mission.get("ChapterID", ""))
                 result_entry: dict = {
@@ -281,7 +438,7 @@ class StarrailExtractor(BaseExtractor):
         """解析单个 .json 中的 OnStartSequece / TaskList 对话序列。
 
         处理以下 $type：
-        - RPG.GameCore.PlayAndWaitSimpleTalk → 普通对话
+        - RPG.GameCore.PlayAndWaitSimpleTalk / PlaySimpleTalk → 普通对话
         - RPG.GameCore.PlayOptionTalk       → 玩家选项
         - RPG.GameCore.WaitCustomString     → 等待/触发对话
         - RPG.GameCore.TriggerCustomString  → 触发对话
@@ -298,8 +455,14 @@ class StarrailExtractor(BaseExtractor):
             for element in sequence.get("TaskList", []):
                 etype = element.get("$type", "")
 
-                if etype == "RPG.GameCore.PlayAndWaitSimpleTalk":
-                    sub_session = {"type": etype, "conversations": []}
+                if etype in (
+                    "RPG.GameCore.PlayAndWaitSimpleTalk",
+                    "RPG.GameCore.PlaySimpleTalk",
+                ):
+                    sub_session = {
+                        "type": "RPG.GameCore.PlayAndWaitSimpleTalk",
+                        "conversations": [],
+                    }
                     for simple_talk in element.get("SimpleTalkList", []):
                         sent_id = simple_talk.get("TalkSentenceID")
                         sc = self._get_speaker_content(sent_id, text_map, talk_sentence_map)
@@ -365,7 +528,12 @@ class StarrailExtractor(BaseExtractor):
 
         return sessions
 
-    def _merge_sessions(self, sessions: list[list[dict]]) -> list[list[dict]]:
+    def _merge_sessions(
+        self,
+        sessions: list[list[dict]],
+        *,
+        require_end: bool = True,
+    ) -> list[list[dict]]:
         """合并对话 session，去除 WaitCustomString 与 PlayAndWaitSimpleTalk 的重复。"""
         merged: list[list[dict]] = []
         for session in sessions:
@@ -393,20 +561,62 @@ class StarrailExtractor(BaseExtractor):
 
                 merged_session.append(item)
 
-            if merged_session and merged_session[-1].get("type") == "RPG.GameCore.EndPerformance":
+            if merged_session and (
+                not require_end
+                or merged_session[-1].get("type") == "RPG.GameCore.EndPerformance"
+            ):
                 merged.append(merged_session)
 
         return merged
+
+    def _classify_talk_source(self, source_dir: str, json_file: str) -> str:
+        """Map Star Rail level paths to output categories close to Genshin talks."""
+        source_type = os.path.basename(source_dir)
+        if source_type == "Mission":
+            # NOTE: Both Config/Level/Mission and Story/Mission share basename
+            # "Mission". Story/Mission files have no numeric subdirectory, so
+            # `kind` becomes the filename itself, falling through to the "Quest"
+            # default — which is correct for mission story dialogue.
+            rel = os.path.relpath(json_file, source_dir)
+            parts = rel.split(os.sep)
+            kind = parts[1] if parts and parts[0].isdigit() and len(parts) > 1 else parts[0]
+            if kind.startswith("Act"):
+                return "Quest"
+            return {
+                "Battle": "Quest",
+                "Common": "NpcOther",
+                "Drop": "NpcOther",
+                "Prop": "Gadget",
+                "Talk": "Npc",
+            }.get(kind, "Quest")
+        if source_type == "TrainVisitor":
+            return "Npc"
+        if source_type == "NPCDialogue":
+            return "Npc"
+        if source_type == "PropDialogue":
+            return "Gadget"
+        if source_type == "MunicipalChatConfig":
+            return "NpcOther"
+        if source_type == "RogueDialogue":
+            return "Rogue"
+        if source_type == "Tutorial":
+            return "Tutorial"
+        if source_type == "Discussion":
+            return "Quest"
+        return source_type
 
     def extract_talks(self, output_path: str | None = None) -> str:
         """从 Config/Level/ 提取对话和剧情文本。
 
         数据源：
-        - Config/Level/Mission/     → 任务对话
-        - Config/Level/Story/       → 剧情对话
+        - Config/Level/Mission/      → 任务对话
         - Config/Level/TrainVisitor/ → 列车访客对话
-        - Config/Level/Activity/    → 活动对话
-        - Config/Level/Message/     → 手机消息
+        - Config/Level/NPCDialogue/  → NPC 常驻对话
+        - Config/Level/PropDialogue/ → 物件对话
+        - Config/Level/MunicipalChatConfig/ → 市民闲聊
+        - Config/Level/RogueDialogue/ → 模拟宇宙/肉鸽对话
+        - Config/Level/Tutorial/     → 教程引导
+        - Story/Discussion/          → 剧情讨论/选项
 
         Args:
             output_path: JSONL 输出路径。
@@ -417,7 +627,10 @@ class StarrailExtractor(BaseExtractor):
         import glob
 
         text_map = self.load_text_map()
-        talk_sentence_map = self._load_talk_sentence_map()
+        try:
+            talk_sentence_map = self._load_talk_sentence_map()
+        except FileNotFoundError:
+            talk_sentence_map = {}
         repo = self.raw_repo_path
 
         if output_path is None:
@@ -428,16 +641,19 @@ class StarrailExtractor(BaseExtractor):
         with open(output_path, "w", encoding="utf-8") as out:
             for source_dir in (
                 "Config/Level/Mission",
-                "Config/Level/Story",
                 "Config/Level/TrainVisitor",
-                "Config/Level/Activity",
-                "Config/Level/Message",
+                "Config/Level/NPCDialogue",
+                "Config/Level/PropDialogue",
+                "Config/Level/MunicipalChatConfig",
+                "Config/Level/RogueDialogue",
+                "Config/Level/Tutorial",
+                "Story/Discussion",
+                "Story/Mission",
             ):
                 full_dir = os.path.join(repo, source_dir)
                 if not os.path.isdir(full_dir):
                     continue
 
-                source_type = os.path.basename(source_dir)
                 pattern = os.path.join(full_dir, "**", "*.json")
                 for json_file in glob.iglob(pattern, recursive=True):
                     with open(json_file, encoding="utf-8") as f:
@@ -449,6 +665,7 @@ class StarrailExtractor(BaseExtractor):
                     sessions = self._parse_on_sequence(info, text_map, talk_sentence_map)
                     sessions = self._merge_sessions(sessions)
                     if sessions:
+                        source_type = self._classify_talk_source(full_dir, json_file)
                         entry = {
                             "_source_type": source_type,
                             "_source_file": os.path.basename(json_file),
@@ -465,13 +682,14 @@ class StarrailExtractor(BaseExtractor):
     # ── Avatars ──────────────────────────────────────────────────────────
 
     def extract_avatars(self, output_path: str | None = None) -> str:
-        """从 ExcelOutput 提取角色基础信息。
+        """从 ExcelOutput 提取角色资料、档案故事和语音。
 
         数据源：
-        - ExcelOutput/AvatarConfig.json → 基础信息（名称、描述、属性、命途等）
-
-        当前为简化实现，仅提取 AvatarConfig 中的基础字段。
-        语音、故事、技能等需后续从更多 ExcelOutput 文件合并。
+        - ExcelOutput/AvatarConfig.json        → 基础信息（名称、描述、属性、命途等）
+        - ExcelOutput/StoryAtlas.json          → 角色详情 / 角色故事
+        - ExcelOutput/StoryAtlasTextmap.json   → StoryID 栏目名
+        - ExcelOutput/VoiceAtlas.json          → 角色语音标题和文本
+        - ExcelOutput/AvatarAtlas.json         → CV / 阵营等图鉴元数据
 
         Args:
             output_path: JSONL 输出路径。
@@ -486,36 +704,128 @@ class StarrailExtractor(BaseExtractor):
         if not os.path.exists(avatar_path):
             raise FileNotFoundError(f"Avatar data file not found: {avatar_path}")
 
-        with open(avatar_path, encoding="utf-8") as f:
-            raw_avatars = json.load(f)
+        # ── Optional atlas/detail tables ────────────────────────────────
+        story_title_map: dict[str, str] = {}
+        for info in self._load_optional_excel("StoryAtlasTextmap.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            story_id = str(entry.get("StoryID", ""))
+            title = self._resolved_text(entry.get("StoryName", ""))
+            if story_id and title:
+                story_title_map[story_id] = title
+
+        stories_by_avatar: dict[str, list[dict]] = {}
+        for info in self._load_optional_excel("StoryAtlas.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            avatar_id = str(entry.get("AvatarID", ""))
+            story_id = str(entry.get("StoryID", ""))
+            content = self._resolved_text(entry.get("Story", ""))
+            if not avatar_id or not story_id or not content:
+                continue
+            stories_by_avatar.setdefault(avatar_id, []).append(
+                {
+                    "id": story_id,
+                    "title": story_title_map.get(story_id, f"story_{story_id}"),
+                    "content": content,
+                    "unlock": entry.get("Unlock", ""),
+                }
+            )
+        for stories in stories_by_avatar.values():
+            stories.sort(key=lambda item: self._sort_key(item.get("id", "")))
+
+        voices_by_avatar: dict[str, list[dict]] = {}
+        for info in self._load_optional_excel("VoiceAtlas.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            avatar_id = str(entry.get("AvatarID", ""))
+            voice_id = str(entry.get("VoiceID", ""))
+            title = self._resolved_text(entry.get("VoiceTitle", ""))
+            content = ""
+            for key in ("Voice_M", "Voice_F", "Voice"):
+                content = self._resolved_text(entry.get(key, ""))
+                if content:
+                    break
+            if not avatar_id or not voice_id or not content:
+                continue
+            voices_by_avatar.setdefault(avatar_id, []).append(
+                {
+                    "id": voice_id,
+                    "title": title or f"voice_{voice_id}",
+                    "content": content,
+                    "sort": entry.get("SortID", 0),
+                }
+            )
+        for voices in voices_by_avatar.values():
+            voices.sort(key=lambda item: self._sort_key(item.get("sort", "")))
+
+        camp_map: dict[str, str] = {}
+        for info in self._load_optional_excel("AvatarCamp.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            camp_id = str(entry.get("ID", ""))
+            name = self._resolved_text(entry.get("Name", ""))
+            if camp_id and name:
+                camp_map[camp_id] = name
+
+        base_type_map: dict[str, str] = {}
+        for info in self._load_optional_excel("AvatarBaseType.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            base_type_id = str(entry.get("ID", ""))
+            name = self._resolved_text(entry.get("BaseTypeText", ""))
+            if base_type_id and name:
+                base_type_map[base_type_id] = name
+
+        comefrom_map: dict[str, str] = {}
+        for info in self._load_optional_excel("AvatarComefrom.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            avatar_id = str(entry.get("ID", ""))
+            desc = self._resolved_text(entry.get("Desc", ""))
+            if avatar_id and desc:
+                comefrom_map[avatar_id] = desc
+
+        atlas_by_avatar: dict[str, dict] = {}
+        for info in self._load_optional_excel("AvatarAtlas.json"):
+            entry = self._unhash_excel_item(info, text_map)
+            avatar_id = str(entry.get("AvatarID", ""))
+            if not avatar_id:
+                continue
+            cv: dict[str, str] = {}
+            for key in ("CV_CN", "CV_JP", "CV_KR", "CV_EN"):
+                value = self._resolved_text(entry.get(key, ""))
+                if value:
+                    cv[key] = value
+            camp_id = str(entry.get("CampID", ""))
+            atlas_by_avatar[avatar_id] = {
+                "cv": cv,
+                "camp": camp_map.get(camp_id, ""),
+            }
 
         avatars: list[dict] = []
-        if isinstance(raw_avatars, list):
-            for info in raw_avatars:
-                if not isinstance(info, dict):
-                    continue
-                avatar_id = str(info.get("AvatarID", ""))
-                if not avatar_id:
-                    continue
-                entry = self._unhash_excel_item(info, text_map)
-                entry["id"] = avatar_id
-                name = entry.get("AvatarName", "")
-                if not name or name == "N/A":
-                    continue
-                entry["name"] = name
-                avatars.append(entry)
-        else:
-            # Fallback for dict format (if ever encountered)
-            for avatar_id, info in raw_avatars.items():
-                if not isinstance(info, dict):
-                    continue
-                entry = self._unhash_excel_item(info, text_map)
-                entry["id"] = str(avatar_id)
-                name = entry.get("AvatarName", "")
-                if not name or name == "N/A":
-                    continue
-                entry["name"] = name
-                avatars.append(entry)
+        for info in self._load_optional_excel("AvatarConfig.json"):
+            avatar_id = str(info.get("AvatarID", ""))
+            if not avatar_id:
+                continue
+            entry = self._unhash_excel_item(info, text_map)
+            entry["id"] = avatar_id
+            name = self._resolved_text(entry.get("AvatarName", ""))
+            if not name:
+                continue
+            entry["name"] = name
+
+            base_type = str(entry.get("AvatarBaseType", ""))
+            if base_type and base_type in base_type_map:
+                entry["AvatarBaseTypeName"] = base_type_map[base_type]
+            if avatar_id in comefrom_map:
+                entry["Comefrom"] = comefrom_map[avatar_id]
+
+            atlas = atlas_by_avatar.get(avatar_id, {})
+            if atlas.get("camp"):
+                entry["Camp"] = atlas["camp"]
+            if atlas.get("cv"):
+                entry["cv"] = atlas["cv"]
+            if stories_by_avatar.get(avatar_id):
+                entry["stories"] = stories_by_avatar[avatar_id]
+            if voices_by_avatar.get(avatar_id):
+                entry["voices"] = voices_by_avatar[avatar_id]
+
+            avatars.append(entry)
 
         if not avatars:
             raise ValueError(f"No avatar entries were extracted from: {avatar_path}")

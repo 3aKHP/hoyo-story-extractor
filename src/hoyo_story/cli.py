@@ -10,6 +10,7 @@ Commands:
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -126,6 +127,14 @@ def _handle_misc(extractor, output_dir):
         typer.echo(f"  ✓ [{category}] {path}")
 
 
+def _pipeline_type_dir(output_dir: str, kind: str) -> str:
+    return str(Path(output_dir) / kind)
+
+
+def _pipeline_misc_jsonl_dir(output_dir: str) -> str:
+    return str(Path(output_dir) / "misc_jsonl")
+
+
 @app.command()
 def convert(
     input_path: Annotated[str, typer.Argument(help="JSONL file or directory to convert")],
@@ -198,31 +207,34 @@ def pipeline(
                 typer.echo(f"[{k}] Extracting...")
                 jl = extract_fn()
                 typer.echo(f"[{k}] Converting...")
-                out = f"{output_dir}/{k}"
+                out = _pipeline_type_dir(output_dir, k)
                 n = len(convert_fn(jl, out))
                 typer.echo(f"  ✓ {n} files → {out}")
 
             typer.echo("[misc] Extracting...")
-            results = extractor.extract_misc(f"{output_dir}/misc_jsonl")
+            results = extractor.extract_misc(_pipeline_misc_jsonl_dir(output_dir))
             for category, jp in results.items():
                 typer.echo(f"[misc/{category}] Converting...")
-                n = len(_convert_misc(jp, f"{output_dir}/misc/{category}"))
-                typer.echo(f"  ✓ {n} files → {output_dir}/misc/{category}")
+                out = str(Path(output_dir) / "misc" / category)
+                n = len(_convert_misc(jp, out))
+                typer.echo(f"  ✓ {n} files → {out}")
             typer.echo("✓ All done")
         elif kind in pipelines:
             extract_fn, convert_fn = pipelines[kind]
             typer.echo(f"[1/2] Extracting {kind}...")
             jl = extract_fn()
             typer.echo("[2/2] Converting...")
-            n = len(convert_fn(jl, output_dir))
-            typer.echo(f"✓ {n} files → {output_dir}")
+            out = _pipeline_type_dir(output_dir, kind)
+            n = len(convert_fn(jl, out))
+            typer.echo(f"✓ {n} files → {out}")
         elif kind == "misc":
             typer.echo("[1/2] Extracting misc...")
-            results = extractor.extract_misc(f"{output_dir}/jsonl")
+            results = extractor.extract_misc(_pipeline_misc_jsonl_dir(output_dir))
             for category, jp in results.items():
                 typer.echo(f"[2/2] Converting {category}...")
-                n = len(_convert_misc(jp, f"{output_dir}/{category}"))
-                typer.echo(f"  ✓ {n} files → {output_dir}/{category}")
+                out = str(Path(output_dir) / "misc" / category)
+                n = len(_convert_misc(jp, out))
+                typer.echo(f"  ✓ {n} files → {out}")
         else:
             raise typer.BadParameter(f"Unknown type: {kind}")
 
@@ -232,7 +244,8 @@ def pipeline(
 def _ensure_implemented_game(game: str) -> None:
     if game not in IMPLEMENTED_GAMES:
         raise typer.BadParameter(
-            f"{game} is planned but not implemented yet. Supported now: genshin"
+            f"{game} is planned but not implemented yet. "
+            f"Supported now: {', '.join(sorted(IMPLEMENTED_GAMES))}"
         )
 
 

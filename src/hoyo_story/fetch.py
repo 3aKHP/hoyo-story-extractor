@@ -42,15 +42,8 @@ GENSHIN_PATHS: list[str] = [
 ]
 
 STARRAIL_PATHS: list[str] = [
-    # TextMap (all supported languages)
-    "/TextMap/TextMapCHS.json",
-    "/TextMap/TextMapMainCHS.json",
-    "/TextMap/TextMapJP.json",
-    "/TextMap/TextMapMainJP.json",
-    "/TextMap/TextMapEN.json",
-    "/TextMap/TextMapMainEN.json",
-    "/TextMap/TextMapKR.json",
-    "/TextMap/TextMapMainKR.json",
+    # TextMap variants differ by language; some base maps are split into *_0/_1.
+    "/TextMap/",
     # Mission hierarchy
     "/ExcelOutput/MainMission.json",
     "/ExcelOutput/SubMission.json",
@@ -59,9 +52,15 @@ STARRAIL_PATHS: list[str] = [
     "/ExcelOutput/TalkSentenceConfig.json",
     # Avatar / character data
     "/ExcelOutput/AvatarConfig.json",
+    "/ExcelOutput/AvatarAtlas.json",
+    "/ExcelOutput/StoryAtlas.json",
+    "/ExcelOutput/StoryAtlasTextmap.json",
+    "/ExcelOutput/VoiceAtlas.json",
+    "/ExcelOutput/AvatarCamp.json",
+    "/ExcelOutput/AvatarBaseType.json",
+    "/ExcelOutput/AvatarComefrom.json",
     "/ExcelOutput/AvatarSkillTreeConfig.json",
     "/ExcelOutput/AvatarPromotionConfig.json",
-    "/ExcelOutput/AvatarPlayerTitleConfig.json",
     # Item / misc
     "/ExcelOutput/ItemConfig.json",
     "/ExcelOutput/ItemConfigAvatar.json",
@@ -69,13 +68,16 @@ STARRAIL_PATHS: list[str] = [
     "/ExcelOutput/ItemConfigRelic.json",
     "/ExcelOutput/ItemConfigEquipment.json",
     "/ExcelOutput/ItemPlayerCard.json",
-    # Level configs (dialogue / story / activity)
+    # Level/story configs (dialogue graphs)
     "/Config/Level/Mission/",
-    "/Config/Level/Story/",
     "/Config/Level/TrainVisitor/",
-    "/Config/Level/Activity/",
-    # Phone messages
-    "/Config/Level/Message/",
+    "/Config/Level/NPCDialogue/",
+    "/Config/Level/PropDialogue/",
+    "/Config/Level/MunicipalChatConfig/",
+    "/Config/Level/RogueDialogue/",
+    "/Config/Level/Tutorial/",
+    "/Story/Discussion/",
+    "/Story/Mission/",
 ]
 
 ZZZ_PATHS: list[str] = []  # 待调研

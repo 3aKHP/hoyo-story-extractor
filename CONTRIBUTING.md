@@ -29,7 +29,7 @@ src/hoyo_story/
 ├── extract/
 │   ├── base.py       ← shared logic (hash replacement, TextMap merging)
 │   ├── genshin.py    ← Genshin-specific extraction
-│   ├── starrail.py   ← Star Rail stub (Phase 5)
+│   ├── starrail.py   ← Star Rail-specific extraction
 │   └── zzz.py        ← ZZZ stub (Phase 6)
 ├── convert.py        ← JSONL → .txt conversion
 └── cli.py            ← typer CLI

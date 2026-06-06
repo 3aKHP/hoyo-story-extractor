@@ -17,11 +17,32 @@ All notable changes to this project will be documented in this file.
     and Config/Level directories
   - `cli.py`: `starrail` registered in `IMPLEMENTED_GAMES` and `_get_extractor()`,
     game-specific converter selection in `pipeline`
-  - 26 new unit tests covering stable hash, TextMap merge, TalkSentenceConfig
+  - Unit tests covering stable hash, TextMap merge, TalkSentenceConfig
     loading, quest/talk/avatar/misc extraction + conversion, and pipeline smoke
+- `docs/dev/starrail-source-structure.md`: upstream TurnBasedGameData source
+  structure audit covering real text sources, sparse checkout gaps, and future
+  extractor guardrails
 
 ### Changed
 
+- Starrail `.txt` conversion now writes cleaner, Genshin-like products:
+  mission dialogue is embedded in quest files, markup escapes are normalized,
+  technical asset/config path fields are omitted, and missions with no readable
+  body are skipped instead of emitted as `(empty mission)`. Starrail avatar
+  filenames now include a sequence prefix so duplicate display names do not
+  overwrite each other.
+- Starrail avatars now merge real profile and voice sources from
+  `StoryAtlas.json`, `StoryAtlasTextmap.json`, `VoiceAtlas.json`, and
+  `AvatarAtlas.json` instead of relying on the thin `AvatarConfig.json` table.
+- Starrail avatar and misc converters now skip metadata-only records that have
+  no reader-facing description, profile, voice line, or story body.
+- Starrail sparse checkout paths now use the verified upstream structure:
+  `TextMap/` as a whole, real avatar/profile/voice atlas files, and additional
+  dialogue graph directories such as `NPCDialogue`, `PropDialogue`,
+  `MunicipalChatConfig`, `RogueDialogue`, and `Story/Discussion`.
+- `pipeline --type quests|talks|avatars|misc` now writes into the same product
+  layout as `--type all`: `<output_dir>/<type>/`, with misc categories under
+  `<output_dir>/misc/<category>/`.
 - `test_cli.py`: `test_unimplemented_game_is_rejected_without_traceback` now
   uses `zzz` instead of `starrail` (since starrail is now implemented)
 

@@ -22,15 +22,16 @@ tests/
 
 ## 当前覆盖
 
-45 个测试：
+80 个测试：
 
 | 模块 | 测试数 | 覆盖内容 |
 |------|:---:|------|
 | `test_extract_base.py` | 20 | `replace_hashes` (11 边界情况), `merge_text_maps` (5), `BaseExtractor` (4) |
 | `test_extract_genshin.py` | 7 | `GenshinExtractor` 属性、TextMap 合并、端到端提取 |
+| `test_extract_starrail.py` | 32 | `StarrailExtractor` 哈希、TextMap、quest/talk/avatar/misc 提取与转换 |
 | `test_convert.py` | 6 | quest 转换、空 quest、多子任务、旁白、`clean_variables` |
-| `test_fetch.py` | 8 | `get_repo_url` 环境变量、无效游戏、`fetch_raw`、路径配置 |
-| `test_cli.py` | 4 | CLI 缺环境变量、缺 raw 数据、未实现游戏、最小 pipeline 烟测 |
+| `test_fetch.py` | 9 | `get_repo_url` 环境变量、无效游戏、`fetch_raw`、路径配置 |
+| `test_cli.py` | 6 | CLI 缺环境变量、缺 raw 数据、未实现游戏、pipeline 产物布局与最小烟测 |
 
 ## 编写测试
 

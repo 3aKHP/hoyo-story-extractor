@@ -88,3 +88,27 @@ class TestFetchRaw:
     def test_game_paths_registered(self) -> None:
         assert GAME_PATHS["genshin"] is GENSHIN_PATHS
         assert GAME_PATHS["starrail"] is STARRAIL_PATHS
+
+    def test_starrail_paths_include_verified_text_sources(self) -> None:
+        assert "/TextMap/" in STARRAIL_PATHS
+        for path in (
+            "/ExcelOutput/AvatarAtlas.json",
+            "/ExcelOutput/StoryAtlas.json",
+            "/ExcelOutput/StoryAtlasTextmap.json",
+            "/ExcelOutput/VoiceAtlas.json",
+            "/Config/Level/NPCDialogue/",
+            "/Config/Level/PropDialogue/",
+            "/Config/Level/MunicipalChatConfig/",
+            "/Config/Level/RogueDialogue/",
+            "/Story/Discussion/",
+        ):
+            assert path in STARRAIL_PATHS
+
+        for stale_path in (
+            "/TextMap/TextMapKR.json",
+            "/ExcelOutput/AvatarPlayerTitleConfig.json",
+            "/Config/Level/Story/",
+            "/Config/Level/Activity/",
+            "/Config/Level/Message/",
+        ):
+            assert stale_path not in STARRAIL_PATHS

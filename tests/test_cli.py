@@ -103,8 +103,9 @@ def test_pipeline_genshin_quests_minimal_smoke(tmp_path: Path, monkeypatch) -> N
     )
 
     assert result.exit_code == 0
-    files = list(out.glob("*.txt"))
+    files = list((out / "quests").glob("*.txt"))
     assert len(files) == 1
+    assert list(out.glob("*.txt")) == []
     content = files[0].read_text(encoding="utf-8")
     assert "**派蒙**：你好" in content
 
@@ -184,6 +185,40 @@ def _write_minimal_starrail_raw(raw: Path) -> None:
     )
 
 
+def _write_minimal_starrail_misc_raw(raw: Path) -> None:
+    """创建最小可工作的星铁 misc raw data 目录结构."""
+    textmap = raw / "TextMap"
+    textmap.mkdir(parents=True)
+    (textmap / "TextMapCHS.json").write_text(
+        json.dumps(
+            {
+                "100": "超镍零件",
+                "200": "机械零件，可用于合成。",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (textmap / "TextMapMainCHS.json").write_text("{}", encoding="utf-8")
+
+    excel = raw / "ExcelOutput"
+    excel.mkdir(parents=True)
+    (excel / "ItemConfig.json").write_text(
+        json.dumps(
+            [
+                {
+                    "ID": 1,
+                    "ItemName": {"Hash": 100},
+                    "ItemDesc": {"Hash": 200},
+                    "ItemMainType": "Material",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_pipeline_starrail_quests_minimal_smoke(tmp_path: Path, monkeypatch) -> None:
     raw = tmp_path / "raw"
     out = tmp_path / "out"
@@ -196,9 +231,30 @@ def test_pipeline_starrail_quests_minimal_smoke(tmp_path: Path, monkeypatch) -> 
     )
 
     assert result.exit_code == 0
-    files = list(out.glob("*.txt"))
+    files = list((out / "quests").glob("*.txt"))
     assert len(files) == 1
+    assert list(out.glob("*.txt")) == []
     content = files[0].read_text(encoding="utf-8")
     assert "# 风暴之眼" in content
     assert "离开看看外面" in content
     assert "你移开视线..." in content
+
+
+def test_pipeline_starrail_misc_uses_product_layout(tmp_path: Path, monkeypatch) -> None:
+    raw = tmp_path / "raw"
+    out = tmp_path / "out"
+    _write_minimal_starrail_misc_raw(raw)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["pipeline", "starrail", str(raw), str(out), "--type", "misc"],
+    )
+
+    assert result.exit_code == 0
+    files = list((out / "misc" / "items").glob("*.txt"))
+    assert len(files) == 1
+    assert list((out / "items").glob("*.txt")) == []
+    content = files[0].read_text(encoding="utf-8")
+    assert "# 超镍零件" in content
+    assert "机械零件" in content
