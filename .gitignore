@@ -32,6 +32,9 @@ local_prod/
 # Ruff cache
 .ruff_cache/
 
+# uv cache (never package this into sdist/wheel)
+.uv-cache/
+
 # Coverage
 htmlcov/
 .coverage

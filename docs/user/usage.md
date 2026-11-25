@@ -82,7 +82,7 @@ uv run hoyo-extract extract genshin ./genshin_raw --type all -o ./extracted/
 ## convert — JSONL 转 .txt
 
 ```bash
-uv run hoyo-extract convert <input> <output_dir> [--type TYPE]
+uv run hoyo-extract convert <input> <output_dir> [--type TYPE] [--data-version VERSION]
 ```
 
 **参数**：
@@ -92,24 +92,35 @@ uv run hoyo-extract convert <input> <output_dir> [--type TYPE]
 | `input` | JSONL 文件路径 (quests/talks/avatars) 或目录 (misc) |
 | `output_dir` | .txt 输出目录 |
 | `--type` / `-t` | 数据类型 (`quests` / `talks` / `avatars` / `misc`) |
+| `--data-version` | 原神 raw data 版本（`6.6` / `6.7` / `7.0` / `7.2`），仅 `--type quests` 生效。默认自动探测 |
 
 **示例**：
 
 ```bash
 uv run hoyo-extract convert quest_CHS.jsonl ./quests_txt --type quests
+uv run hoyo-extract convert quest_CHS.jsonl ./quests_txt --type quests --data-version 7.0
 uv run hoyo-extract convert talks_CHS.jsonl ./talks_txt --type talks
 uv run hoyo-extract convert avatars_CHS.jsonl ./avatars_txt --type avatars
 ```
+
+> CodexQuest 在 6.6 使用 `IKECHKLEFFK`、7.0 使用 `EBNBLBEIFFJ` 等版本字段。
+> `convert` / `pipeline` 会从 quest JSON 自动探测版本；
+> 只有探测失败时才需要显式指定 `--data-version`。
+
+7.2 的任务数据采用 `subQuests`、`textId` 等明文字段，支持自动探测。
+任务标题由 `mainQuestTitle` 读取，简介和章节元信息分别保留。
+Talk 的显式说话人名称优先使用；缺省的 NPC 名称从同一 raw 快照的 NPC 表补全。
+角色文件名包含序号，多个同名角色记录分别保存。
 
 ---
 
 ## pipeline — 一键管道
 
 ```bash
-uv run hoyo-extract pipeline <game> <repo> <output_dir> [--lang LANG] [--type TYPE]
+uv run hoyo-extract pipeline <game> <repo> <output_dir> [--lang LANG] [--type TYPE] [--data-version VERSION]
 ```
 
-**参数**：同 `extract` + `convert` 的合并。
+**参数**：同 `extract` + `convert` 的合并（`--data-version` 语义同上，仅原神 quest 生效）。
 
 `pipeline` 的 `<output_dir>` 是产品根目录：`--type all` 和单类
 `--type quests` / `talks` / `avatars` 都会写入 `<output_dir>/<type>/`，
@@ -120,6 +131,9 @@ uv run hoyo-extract pipeline <game> <repo> <output_dir> [--lang LANG] [--type TY
 ```bash
 # 全量提取
 uv run hoyo-extract pipeline genshin ./genshin_raw ./output --lang CHS --type all
+
+# 固定为 7.2 的数据快照，使用独立输出目录
+uv run hoyo-extract pipeline genshin ./genshin_72_raw ./local_prod/genshin/v7.2 --lang CHS --type all --data-version 7.2
 
 # 单类
 uv run hoyo-extract pipeline genshin ./genshin_raw ./output --type quests

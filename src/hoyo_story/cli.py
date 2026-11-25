@@ -142,6 +142,14 @@ def convert(
     kind: Annotated[
         str, typer.Option("--type", "-t", help="Data type: quests, talks, avatars, misc")
     ] = "quests",
+    data_version: Annotated[
+        str | None,
+        typer.Option(
+            "--data-version",
+            help="Genshin raw data version (6.6 / 6.7 / 7.0 / 7.2). "
+            "Default: auto-detect from quest JSON.",
+        ),
+    ] = None,
 ) -> None:
     """Convert JSONL files into per-item .txt files."""
     converters = {
@@ -155,7 +163,10 @@ def convert(
         raise typer.BadParameter(f"Unknown type: {kind}")
 
     def action() -> None:
-        files = converters[kind](input_path, output_dir)
+        if kind == "quests":
+            files = convert_quests(input_path, output_dir, data_version=data_version)
+        else:
+            files = converters[kind](input_path, output_dir)
         typer.echo(f"✓ Converted {len(files)} files → {output_dir}")
 
     _run_cli(action)
@@ -173,6 +184,14 @@ def pipeline(
     kind: Annotated[
         str, typer.Option("--type", "-t", help="Data type: quests, talks, avatars, misc, all")
     ] = "quests",
+    data_version: Annotated[
+        str | None,
+        typer.Option(
+            "--data-version",
+            help="Genshin raw data version (6.6 / 6.7 / 7.0 / 7.2). "
+            "Default: auto-detect from quest JSON.",
+        ),
+    ] = None,
 ) -> None:
     """Run extract → convert in one command."""
     def action() -> None:
@@ -196,8 +215,19 @@ def pipeline(
             _convert_avatars = convert_starrail_avatars
             _convert_misc = convert_starrail_misc
 
+        # Genshin quest conversion is version-aware; wrap it so the pipeline
+        # sees a uniform (jsonl, out) signature. Starrail converters take no
+        # version argument.
+        if game == "genshin":
+
+            def _quest_convert(jl: str, out: str) -> list[str]:
+                return _convert_quests(jl, out, data_version=data_version)
+
+        else:
+            _quest_convert = _convert_quests
+
         pipelines = {
-            "quests": (extractor.extract_quests, _convert_quests),
+            "quests": (extractor.extract_quests, _quest_convert),
             "talks": (extractor.extract_talks, _convert_talks),
             "avatars": (extractor.extract_avatars, _convert_avatars),
         }

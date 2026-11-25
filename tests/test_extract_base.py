@@ -8,10 +8,68 @@ from pathlib import Path
 import pytest
 
 from hoyo_story.extract.base import (
+    QUEST_KEY_MAPS,
     BaseExtractor,
+    detect_quest_version,
     merge_text_maps,
     replace_hashes,
+    resolve_quest_keys,
 )
+
+
+class TestQuestKeyMaps:
+    """版本感知的 quest key 映射."""
+
+    def test_all_versions_have_all_roles(self) -> None:
+        roles = {
+            "text", "speaker", "dialogs", "text_obj", "subquests", "items", "subq_title"
+        }
+        assert set(QUEST_KEY_MAPS) == {"6.6", "6.7", "7.0", "7.2"}
+        for version, keys in QUEST_KEY_MAPS.items():
+            assert set(keys) == roles, f"{version} missing roles"
+
+    def test_versions_have_distinct_keys(self) -> None:
+        # 每个版本的混淆 key 应互不相同(上游每版本重新混淆)
+        for role in ("subquests", "items", "speaker"):
+            seen = {QUEST_KEY_MAPS[v][role] for v in QUEST_KEY_MAPS}
+            assert len(seen) == len(QUEST_KEY_MAPS), f"{role} keys not distinct across versions"
+
+    def test_6_6_matches_module_defaults(self) -> None:
+        keys = resolve_quest_keys("6.6")
+        assert keys["subquests"] == "IKECHKLEFFK"
+        assert keys["text"] == "OPKOJIEHJAE"
+        assert keys["speaker"] == "KDDMHACHOGH"
+        assert keys["dialogs"] == "JOIPGFEDKFO"
+        assert keys["text_obj"] == "LEMPMANEBOB"
+        assert keys["items"] == "DLLOBLBEBPM"
+        assert keys["subq_title"] == "CGJPNLJCKKB"
+
+    def test_7_0_keys(self) -> None:
+        keys = resolve_quest_keys("7.0")
+        assert keys["subquests"] == "EBNBLBEIFFJ"
+        assert keys["text"] == "BNJEGIAOKGM"
+        assert keys["speaker"] == "IILBCFJNPGA"
+        assert keys["dialogs"] == "OFKGPGLHIDJ"
+        assert keys["text_obj"] == "JGPDCLOJKLC"
+        assert keys["items"] == "PEAKPGNONFA"
+        assert keys["subq_title"] == "OGEGCCLHIHP"
+
+    def test_resolve_unknown_version_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown genshin data version"):
+            resolve_quest_keys("9.9")
+
+    def test_detect_quest_version(self) -> None:
+        assert detect_quest_version({"EBNBLBEIFFJ": []}) == "7.0"
+        assert detect_quest_version({"HLCINEMBGEF": []}) == "6.7"
+        assert detect_quest_version({"IKECHKLEFFK": []}) == "6.6"
+
+    def test_detect_unknown_version_returns_empty(self) -> None:
+        assert detect_quest_version({"unknown": 1}) == ""
+
+    def test_detect_7_0_quest_does_not_match_6_6(self) -> None:
+        # 7.0 quest 只含 7.0 的 key,不应误判为 6.6
+        quest = {"EBNBLBEIFFJ": [], "ALOHJMPDFKI": {}, "CBLIMBBBKNK": {}}
+        assert detect_quest_version(quest) == "7.0"
 
 
 class TestReplaceHashes:

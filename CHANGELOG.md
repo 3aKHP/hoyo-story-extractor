@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Genshin 7.2 plaintext CodexQuest fields, semantic task titles and chapter
+  metadata, with automatic detection and explicit `--data-version 7.2`.
+- Three earlier obfuscated Talk layouts retained in the 7.2 snapshot.
+- Synthetic regression tests for the 7.2 task schema, speaker names, retained
+  Talk layouts, and duplicate avatar display names.
+
+### Fixed
+
+- Talk speaker names accept plaintext name hashes and use the NPC table when
+  a dialogue omits its display name. Unresolved NPC names remain unnamed.
+- Avatar output uses sequence-prefixed filenames so records sharing a display
+  name retain separate files.
+
+## [0.3.0] — 2026-08-13
+
+### Added
+
+- **Genshin 7.0 (CNRELWin7.0.0) support** — upstream re-obfuscates CodexQuest
+  field names on every major version; extraction is now version-aware:
+  - `extract/base.py`: `QUEST_KEY_MAPS` registers the quest key map for
+    6.6 / 6.7 / 7.0; `resolve_quest_keys()` and `detect_quest_version()`
+    select the right map, with auto-detection from quest JSON top-level keys
+  - `convert.py`: `convert_quests()` accepts `data_version` (default:
+    auto-detect), and reads all quest fields through the resolved key map
+  - `cli.py`: `convert` / `pipeline` gain `--data-version` for explicit
+    override when auto-detection fails
+  - Tests: `TestQuestKeyMaps` (mapping + detection), `TestConvertV70`
+    (7.0 quest conversion with auto-detect / explicit version / failure path),
+    `TestConvertTalksV70` (7.0 talk formats + Group skip), Genshin TextMap
+    +512 offset alias tests
+- Verified against real CNRELWin7.0.0 data: 503 quests, 55,925 talk files,
+  165 avatars.
+- **Genshin Talk v7.0 adaption** — upstream made two breaking changes to the
+  Talk pipeline in 6.7/7.0, both now handled:
+  - TextMap reorganization: Talk dialogue content moved from
+    `TextMap_Medium{lang}.json` into `TextMap{lang}.json` with every key
+    shifted by +512. `GenshinExtractor.load_text_map()` registers a `K - 512`
+    alias for each CHS key (`setdefault`, direct hits win), so Talk content
+    hashes resolve without affecting quest/avatar lookups.
+  - Type B key re-obfuscation: `IOEDPLCPFFB/DGGDDIMMIDO/HJJLLECCCPI` became
+    `PFALHAKIILD/LFGCLNLPAPB/OACNIBLFFDI` in 7.0. `convert_talks()` now
+    detects the format per line via `_TALK_FORMATS` (6.6 Type A/B, 7.0 new
+    keys, plain `dialogList` files, and the new 7.0 Activity format
+    `GDDPNNHLGBL/EENIFNIGHCH/DMIFDJDEFAL`), and skips condition-only Group
+    files.
+
+### Changed
+
+- Version bumped to 0.3.0 (was inconsistently reported as 0.1.0 in
+  `pyproject.toml` / `__init__.py` while CHANGELOG already tracked 0.2.0).
+
 ## [0.2.0] — 2026-06-05
 
 ### Added

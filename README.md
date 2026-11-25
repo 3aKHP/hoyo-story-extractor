@@ -63,15 +63,23 @@ uv run hoyo-extract extract genshin ./genshin_raw --type talks -o talks.jsonl
 uv run hoyo-extract convert talks.jsonl ./talks_txt --type talks
 ```
 
+> 原神 quest 转换会自动探测 raw data 版本(6.6 / 6.7 / 7.0 ...)。
+> 探测失败时可显式指定:`--data-version 7.0`。
+
+原神 7.2 的明文 `subQuests` / `textId` 格式支持自动探测，也可显式使用
+`--data-version 7.2`。任务标题、简介与章节元信息按语义字段读取；Talk 保留显式
+说话人名称，并通过 NPC 表补全缺省名称。角色文件采用 `0001_名称.txt` 的序号格式，
+同名记录各自保存。提取前应固定 raw data 提交，并使用独立输出目录。
+
 ---
 
 ## 提取数据类型
 
-| 类型 | 数据源 | v6.6 产出 |
+| 类型 | 数据源 | v7.0 产出 |
 |------|--------|:---:|
-| **Quests** | `BinOutput/CodexQuest/*.json` | 483 个任务 |
-| **Talks** | `BinOutput/Talk/` (15 子类) | 47,576 段 NPC/物件对话 |
-| **Avatars** | `ExcelBinOutput/Avatar*` + `Fetter*` | 120 角色资料/语音/故事 |
+| **Quests** | `BinOutput/CodexQuest/*.json` | 503 个任务 |
+| **Talks** | `BinOutput/Talk/` (15 子类) | 55,925 个对话文件 |
+| **Avatars** | `ExcelBinOutput/Avatar*` + `Fetter*` | 165 角色资料/语音/故事 |
 | **Materials** | `ExcelBinOutput/Material*` | 9,596 材料 |
 | **Weapons** | `ExcelBinOutput/Weapon*` + `Readable/` | 241 武器 |
 | **Relics** | `ExcelBinOutput/Reliquary*` + `Readable/` | 4,292 圣遗物 |
@@ -86,7 +94,7 @@ hoyo-story-extractor/              ← 提取引擎（纯 Python，不含游戏�
 │   ├── fetch.py                   ← Raw data 获取（sparse checkout）
 │   ├── extract/
 │   │   ├── base.py                ← 公共提取逻辑（递归哈希替换）
-│   │   ├── genshin.py             ← 原神特化（v6.6 适配）
+│   │   ├── genshin.py             ← 原神特化（v6.6–v7.2 适配）
 │   │   ├── starrail.py            ← 星铁特化（Phase 5）
 │   │   └── zzz.py                 ← 绝区零桩（Phase 6）
 │   ├── convert.py                 ← JSONL → .txt 转换器

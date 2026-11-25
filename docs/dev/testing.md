@@ -15,6 +15,8 @@ uv run pytest -k "test_replace"  # 按名称筛选
 tests/
 ├── test_extract_base.py    ← replace_hashes, merge_text_maps, BaseExtractor
 ├── test_extract_genshin.py ← GenshinExtractor
+├── test_genshin_v72.py     ← 7.2 字段、说话人及同名角色保护
+├── test_extract_starrail.py ← StarrailExtractor
 ├── test_convert.py         ← 所有转换器
 ├── test_fetch.py           ← get_repo_url, fetch_raw
 └── test_cli.py             ← CLI happy path and user-friendly failures
@@ -22,16 +24,17 @@ tests/
 
 ## 当前覆盖
 
-80 个测试：
+默认测试集使用合成数据，数量以 pytest 收集结果为准：
 
-| 模块 | 测试数 | 覆盖内容 |
-|------|:---:|------|
-| `test_extract_base.py` | 20 | `replace_hashes` (11 边界情况), `merge_text_maps` (5), `BaseExtractor` (4) |
-| `test_extract_genshin.py` | 7 | `GenshinExtractor` 属性、TextMap 合并、端到端提取 |
-| `test_extract_starrail.py` | 32 | `StarrailExtractor` 哈希、TextMap、quest/talk/avatar/misc 提取与转换 |
-| `test_convert.py` | 6 | quest 转换、空 quest、多子任务、旁白、`clean_variables` |
-| `test_fetch.py` | 9 | `get_repo_url` 环境变量、无效游戏、`fetch_raw`、路径配置 |
-| `test_cli.py` | 6 | CLI 缺环境变量、缺 raw 数据、未实现游戏、pipeline 产物布局与最小烟测 |
+| 模块 | 覆盖内容 |
+|------|------|
+| `test_extract_base.py` | 哈希替换、TextMap 合并、版本映射和基础提取 |
+| `test_extract_genshin.py` | GenshinExtractor 属性、TextMap 合并、端到端提取 |
+| `test_genshin_v72.py` | 明文任务的自动与显式版本、标题顺序、NPC 名称、旧 Talk 布局、同名角色文件 |
+| `test_extract_starrail.py` | StarrailExtractor 哈希、TextMap、quest/talk/avatar/misc 提取与转换 |
+| `test_convert.py` | quest 转换、空 quest、多子任务、旁白及 Talk 格式 |
+| `test_fetch.py` | 仓库环境变量、无效游戏、获取 raw 和路径配置 |
+| `test_cli.py` | CLI 错误、未实现游戏、pipeline 产物布局与最小烟测 |
 
 ## 编写测试
 

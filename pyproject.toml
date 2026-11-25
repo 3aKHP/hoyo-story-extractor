@@ -7,7 +7,7 @@ packages = ["src/hoyo_story"]
 
 [project]
 name = "hoyo-story-extractor"
-version = "0.1.0"
+version = "0.3.0"
 description = "多游戏米哈游剧情文本自动提取引擎"
 readme = "README.md"
 requires-python = ">=3.11"

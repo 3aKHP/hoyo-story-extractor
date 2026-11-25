@@ -1,6 +1,6 @@
-"""原神（AnimeGameData）提取器 — v6.6 适配。
+"""原神（AnimeGameData）提取器 — 支持 v6.6–v7.2 文本数据。
 
-数据源：DimbreathBot/AnimeGameData (CNRELWin6.6.0)
+数据源：DimbreathBot/AnimeGameData。
 
 提取类型：
     quests  — CodexQuest 任务剧情对话
@@ -31,9 +31,25 @@ TALK_B_SPEAKER = "DGGDDIMMIDO"    # speaker role dict
 TALK_B_CONTENT = "HJJLLECCCPI"    # content TextMap hash (becomes str)
 TALK_B_ID = "GMOMCKNPBGE"         # talk content ID
 
+# ── v7.0 Talk field keys ───────────────────────────────────────────────────
+# Upstream re-obfuscated the Type B keys in 7.0 (PFALHAKIILD / LFGCLNLPAPB /
+# OACNIBLFFDI); Type A keys are unchanged. The extractor itself only needs
+# these when the converter-level format map (convert.py _TALK_FORMATS) reads
+# them; extraction uses recursive hash replacement only.
+TALK_NEW_LIST = "PFALHAKIILD"       # dialog list (was IOEDPLCPFFB)
+TALK_NEW_SPEAKER = "LFGCLNLPAPB"    # speaker role dict (was DGGDDIMMIDO)
+TALK_NEW_CONTENT = "OACNIBLFFDI"    # content TextMap hash (was HJJLLECCCPI)
+TALK_NEW_ID = "IOKNFDJFGDH"         # talk id (was KFCNJPJOJLA)
+
+# ── v7.0 Activity talk keys (new dialogue format in 7.0) ──────────────────
+TALK_ACT_LIST = "GDDPNNHLGBL"       # dialog list
+TALK_ACT_SPEAKER = "EENIFNIGHCH"    # speaker role dict
+TALK_ACT_CONTENT = "DMIFDJDEFAL"    # content TextMap hash
+TALK_ACT_ID = "LDLMECNIJFC"         # talk id
+
 
 class GenshinExtractor(BaseExtractor):
-    """原神剧情文本提取器 — v6.6 适配。
+    """原神剧情文本提取器。
 
     extract_quests() 从 BaseExtractor 继承默认实现。
     其余方法为本类特有。
@@ -46,9 +62,40 @@ class GenshinExtractor(BaseExtractor):
     ]
     quest_data_path = "BinOutput/CodexQuest"
 
+    # ── TextMap offset handling (v6.7+) ────────────────────────────────
+    # Upstream reorganized TextMap in v6.7: Talk dialogue content moved from
+    # TextMap_Medium{lang}.json into TextMap{lang}.json with every key shifted
+    # by +512 (verified against real 6.7/7.0 data: talk hash H resolves at
+    # TextMap[H + 512]). Quest / avatar hashes still resolve directly, so we
+    # register each CHS key K also as K - 512 via setdefault (direct hits win).
+    _HASH_OFFSET = 512
+
+    def load_text_map(self) -> dict[str, str]:
+        """加载合并 TextMap,并为 v6.7+ 的 +512 key 偏移注册别名。
+
+        与 BaseExtractor.load_text_map 不同:合并 CHS + Medium 之后,把
+        TextMap{lang}.json 中每个 key K 额外注册为 K - _HASH_OFFSET
+        (仅当该 key 尚未存在),从而让 v6.7+ 的 Talk 内容 hash 可以命中。
+        """
+        text_map = super().load_text_map()
+        chs_path = os.path.join(
+            self.raw_repo_path, "TextMap", f"TextMap{self.lang}.json"
+        )
+        if os.path.exists(chs_path):
+            with open(chs_path, encoding="utf-8") as f:
+                chs = json.load(f)
+            for key, value in chs.items():
+                try:
+                    shifted = int(key) - self._HASH_OFFSET
+                except (TypeError, ValueError):
+                    continue
+                if shifted >= 0:
+                    text_map.setdefault(str(shifted), value)
+        return text_map
+
     # ── NPC name lookup ────────────────────────────────────────────────
 
-    def _load_npc_names(self) -> dict[str, str]:
+    def _load_npc_names(self, text_map: dict[str, str] | None = None) -> dict[str, str]:
         """从 NpcExcelConfigData 加载 NPC ID → 名称映射。"""
         npc_path = os.path.join(
             self.raw_repo_path, "ExcelBinOutput", "NpcExcelConfigData.json"
@@ -59,12 +106,15 @@ class GenshinExtractor(BaseExtractor):
         with open(npc_path, encoding="utf-8") as f:
             npc_list = json.load(f)
 
-        text_map = self.load_text_map()
+        if text_map is None:
+            text_map = self.load_text_map()
         result: dict[str, str] = {}
         for npc in npc_list:
             npc_id = str(npc["id"])
             name_hash = str(npc.get("nameTextMapHash", ""))
-            result[npc_id] = text_map.get(name_hash, npc_id)
+            name = text_map.get(name_hash, "")
+            if name:
+                result[npc_id] = name
         return result
 
     # ── Talks ───────────────────────────────────────────────────────────
@@ -82,6 +132,7 @@ class GenshinExtractor(BaseExtractor):
             JSONL 文件路径。
         """
         text_map = self.load_text_map()
+        npc_names = self._load_npc_names(text_map)
         talk_dir = os.path.join(self.raw_repo_path, "BinOutput", "Talk")
         if not os.path.isdir(talk_dir):
             raise FileNotFoundError(f"Talk data directory not found: {talk_dir}")
@@ -108,6 +159,7 @@ class GenshinExtractor(BaseExtractor):
                         continue
                     talk = replace_hashes(talk, text_map)
                     if talk:
+                        _add_talk_speaker_names(talk, npc_names)
                         # Tag with source sub-type for downstream filtering
                         talk["_talk_type"] = sub
                         talk["_talk_file"] = file_name
@@ -307,6 +359,24 @@ class GenshinExtractor(BaseExtractor):
 
 
 # ── Misc helpers ────────────────────────────────────────────────────────
+
+def _add_talk_speaker_names(talk: dict, npc_names: dict[str, str]) -> None:
+    """Attach names for NPC roles whose dialogue omits an explicit name."""
+    for value in talk.values():
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            for role in item.values():
+                if not isinstance(role, dict):
+                    continue
+                if role.get("type", role.get("_type")) != "TALK_ROLE_NPC":
+                    continue
+                name = npc_names.get(str(role.get("id", role.get("_id", ""))))
+                if name:
+                    item["_speaker_name"] = name
+                break
 
 def _extract_excel_sheet(
     path: str,

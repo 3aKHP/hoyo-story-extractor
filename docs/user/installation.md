@@ -29,8 +29,8 @@ uv sync --extra dev
 验证安装：
 
 ```bash
-uv run pytest                  # 45 tests expected
-uv run hoyo-extract --version  # hoyo-story-extractor v0.1.0
+uv run pytest                  # 运行合成数据测试
+uv run hoyo-extract --version  # hoyo-story-extractor v0.3.0
 uv run hoyo-extract --help     # 查看可用命令
 ```
 

@@ -11,6 +11,9 @@ def convert_xxx(jsonl_path: str, output_dir: str) -> list[str]:
     """返回生成的文件路径列表"""
 ```
 
+唯一例外是 `convert_quests()`，它额外接受一个版本参数（见下文
+「版本感知的 quest 转换」）。
+
 ## 现有转换器
 
 | 函数 | 输入 | 输出 |
@@ -19,6 +22,77 @@ def convert_xxx(jsonl_path: str, output_dir: str) -> list[str]:
 | `convert_talks()` | talk JSONL | 按 Talk 类型分目录 `.txt` |
 | `convert_avatars()` | avatar JSONL | 按角色分文件 `.txt` |
 | `convert_misc()` | misc JSONL | 按条目分文件 `.txt` |
+
+## 版本感知的 quest 转换
+
+原神 CodexQuest 在 6.6、6.7、7.0 分别使用一组混淆字段，7.2 使用明文字段。
+`convert_quests()` 通过版本映射读取这些结构：
+
+```python
+def convert_quests(jsonl_path: str, output_dir: str, data_version: str | None = None) -> list[str]
+```
+
+- `data_version=None`：从首个 quest 的顶层 key 自动探测版本
+  （`detect_quest_version()`，定义在 `extract/base.py`）
+- `data_version="7.0"` 等：跳过探测，直接使用对应版本的表
+
+key 映射表定义在 `extract/base.py` 的 `QUEST_KEY_MAPS`，每个版本登记
+7 个语义角色 → 混淆 key 的映射：
+
+| 语义角色 | 6.6 | 7.0 |
+|------|------|------|
+| `text`（文本对象内 hash 字段） | `OPKOJIEHJAE` | `BNJEGIAOKGM` |
+| `speaker`（item 上说话人） | `KDDMHACHOGH` | `IILBCFJNPGA` |
+| `dialogs`（item 内对话列表） | `JOIPGFEDKFO` | `OFKGPGLHIDJ` |
+| `text_obj`（对话条目内文本对象） | `LEMPMANEBOB` | `JGPDCLOJKLC` |
+| `subquests`（顶层子任务列表） | `IKECHKLEFFK` | `EBNBLBEIFFJ` |
+| `items`（子任务内条目） | `DLLOBLBEBPM` | `PEAKPGNONFA` |
+| `subq_title`（子任务标题对象） | `CGJPNLJCKKB` | `OGEGCCLHIHP` |
+
+**接入新版本（如 7.1）的步骤**：
+
+1. 抓取一份该版本的 `BinOutput/CodexQuest/*.json`,对照语义找到 7 个角色对应的混淆 key
+2. 在 `QUEST_KEY_MAPS` 增加一个版本条目
+3. 在 `tests/test_extract_base.py` 的 `TestQuestKeyMaps` 加断言(可选)
+4. 本地用真实数据验证 `convert_quests(..., data_version="7.1")` 产出正确
+
+## Talk 的版本兼容(6.6 / 7.0)
+
+Talk 转换器在 7.0 发生了两处变化,均已适配:
+
+1. **TextMap 偏移(v6.7+)**：上游把 Talk 对话内容从 `TextMap_Medium{lang}.json`
+   移入 `TextMap{lang}.json`,且所有 key 偏移 **+512**。因此 Talk 文件里存的
+   内容 hash `H` 需要查询 `TextMap[H + 512]`。`GenshinExtractor.load_text_map()`
+   为 CHS 每个 key `K` 额外注册 `K - 512` 别名(`setdefault`,直接命中优先),
+   对 quest / avatar 的既有直接命中无影响。6.6 数据不需要偏移,但该别名
+   逻辑在 6.6 上也安全(不会覆盖已有映射)。
+
+2. **Type B key 重混淆**：7.0 将 6.6 的 Type B 字段全部重命名
+   (`IOEDPLCPFFB` → `PFALHAKIILD`, `DGGDDIMMIDO` → `LFGCLNLPAPB`,
+   `HJJLLECCCPI` → `OACNIBLFFDI`),Type A 字段不变。`convert_talks()` 通过
+   `_TALK_FORMATS` 表按顶层 list key 自动识别格式,同时兼容:
+   - 6.6 Type A / Type B 旧 key
+   - 7.0 新混淆 key
+   - 少量明文 key 文件(`dialogList` / `talkRole` / `talkContentTextMapHash`)
+   - Group 类文件(仅条件无对话,自动跳过)
+
+**Excel 转换不受影响**：Excel 使用语义 key（`nameTextMapHash` 等），
+6.6–7.0 未变。
+
+## Genshin 7.2
+
+7.2 的 CodexQuest 使用明文字段。`QUEST_KEY_MAPS["7.2"]` 依次登记
+`textId`、`speakerText`、`dialogs`、`text`、`subQuests`、`items` 与
+`subQuestTitle`。转换器通过 `mainQuestTitle`、`mainQuestDesp`、`chapterNum`
+和 `chapterTitle` 读取任务头部，输出不依赖 JSON 字段顺序。
+
+Talk 同时包含明文 `dialogList` 及保留的混淆格式；`_TALK_FORMATS` 登记这几种
+已核验的布局。提取层将缺省的 NPC 名称写入派生字段 `_speaker_name`，名称来自
+同一快照的 NPC 表；转换层优先读取显式名称，再读取该派生字段。
+
+`convert_avatars()` 使用 `{序号:04d}_{名称}.txt`，同名角色记录保持独立。
+真实数据验证应同时比较返回条目数、实际文件数及各原始文本字段在输出中的覆盖，
+并单列 TextMap 未收录的哈希。合成测试位于 `tests/test_genshin_v72.py`。
 
 ## 添加新转换器
 

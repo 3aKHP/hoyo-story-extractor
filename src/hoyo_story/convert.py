@@ -14,13 +14,15 @@ import re
 from pathlib import Path
 
 from hoyo_story.extract.base import (
-    DIALOGS_KEY,
-    ITEMS_KEY,
-    SPEAKER_KEY,
-    SUBQ_TITLE_KEY,
-    SUBQUESTS_KEY,
+    DIALOGS_KEY,  # noqa: F401  # re-exported for backward compatibility
+    ITEMS_KEY,  # noqa: F401  # re-exported for backward compatibility
+    SPEAKER_KEY,  # noqa: F401  # re-exported for backward compatibility
+    SUBQ_TITLE_KEY,  # noqa: F401  # re-exported for backward compatibility
+    SUBQUESTS_KEY,  # noqa: F401  # re-exported for backward compatibility
     TEXT_KEY,
-    TEXT_OBJ_KEY,
+    TEXT_OBJ_KEY,  # noqa: F401  # re-exported for backward compatibility
+    detect_quest_version,
+    resolve_quest_keys,
 )
 
 # ── v6.6 Talk field keys (must match genshin.py) ─────────────────────────
@@ -37,6 +39,43 @@ TALK_B_LIST = "IOEDPLCPFFB"
 TALK_B_SPEAKER = "DGGDDIMMIDO"
 TALK_B_CONTENT = "HJJLLECCCPI"
 TALK_B_ID = "GMOMCKNPBGE"
+
+# ── v7.0 Talk field keys ─────────────────────────────────────────────────
+# Upstream re-obfuscated the v6.6 Type B keys in 7.0 (verified against real
+# CNRELWin7.0.0 data). The v6.6 Type A keys (TALK_A_*) are unchanged in 7.0.
+# Some 7.0 files even use plain English keys (dialogList / talkRole /
+# talkContentTextMapHash), which the converter accepts as-is.
+TALK_NEW_LIST = "PFALHAKIILD"       # dialog list (was IOEDPLCPFFB)
+TALK_NEW_SPEAKER = "LFGCLNLPAPB"    # speaker role dict (was DGGDDIMMIDO)
+TALK_NEW_CONTENT = "OACNIBLFFDI"    # content text (was HJJLLECCCPI)
+TALK_NEW_ID = "IOKNFDJFGDH"         # talk id (was KFCNJPJOJLA)
+
+# Plain-key format seen in some 7.0 files
+TALK_PLAIN_LIST = "dialogList"
+TALK_PLAIN_SPEAKER = "talkRole"
+TALK_PLAIN_CONTENT = "talkContentTextMapHash"
+TALK_PLAIN_ID = "talkId"
+
+# v7.0 Activity dialogue format (new in 7.0; verified against real data)
+TALK_ACT_LIST = "GDDPNNHLGBL"       # dialog list
+TALK_ACT_SPEAKER = "EENIFNIGHCH"    # speaker role dict
+TALK_ACT_CONTENT = "DMIFDJDEFAL"    # content text
+TALK_ACT_ID = "LDLMECNIJFC"         # talk id
+
+# Each format: (list_key, speaker_key, content_key, id_key)
+# Group files (e.g. *_Group.json) hold conditions, not dialogue, and are
+# skipped by the converter (they contain none of these list keys).
+_TALK_FORMATS: tuple[tuple[str, str, str, str], ...] = (
+    (TALK_A_LIST, TALK_A_SPEAKER, TALK_A_CONTENT, TALK_A_TALK_ID),
+    (TALK_B_LIST, TALK_B_SPEAKER, TALK_B_CONTENT, TALK_A_TALK_ID),
+    (TALK_NEW_LIST, TALK_NEW_SPEAKER, TALK_NEW_CONTENT, TALK_NEW_ID),
+    (TALK_ACT_LIST, TALK_ACT_SPEAKER, TALK_ACT_CONTENT, TALK_ACT_ID),
+    (TALK_PLAIN_LIST, TALK_PLAIN_SPEAKER, TALK_PLAIN_CONTENT, TALK_PLAIN_ID),
+    # Earlier obfuscated records retained in the 7.2 release data.
+    ("LOJEOMAPIIM", "HJIPOJOECIF", "CMKPOJOEHHA", "LBPGKDMGFBN"),
+    ("KJNKFMPAGAA", "IFAOOKCBDGD", "EMKCOIBADBJ", "PBAEPDPNKEJ"),
+    ("AAOAAFLLOJI", "HJLEMJIGNFE", "BDOKCLNNDGN", "FEOACBMDCKJ"),
+)
 
 
 def _escape_filename(name: str) -> str:
@@ -122,13 +161,25 @@ def _format_starrail_rarity(value: object) -> str:
 # Quests
 # ═══════════════════════════════════════════════════════════════════════════
 
-def convert_quests(jsonl_path: str, output_dir: str) -> list[str]:
-    """将 quest JSONL 转换为按 quest 分文件的 .txt。"""
+def convert_quests(
+    jsonl_path: str,
+    output_dir: str,
+    data_version: str | None = None,
+) -> list[str]:
+    """将 quest JSONL 转换为按 quest 分文件的 .txt。
+
+    Args:
+        jsonl_path: quest JSONL 输入路径（extract 阶段产出）。
+        output_dir: 输出 .txt 目录。
+        data_version: Genshin raw data 版本（"6.6" / "6.7" / "7.0" ...）。
+            None 时按首个 quest 自动探测。
+    """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[str] = []
     count = 0
+    keys: dict[str, str] | None = None
 
     with open(jsonl_path, encoding="utf-8") as fh:
         for line in fh:
@@ -140,16 +191,38 @@ def convert_quests(jsonl_path: str, output_dir: str) -> list[str]:
             except json.JSONDecodeError:
                 continue
 
+            # Resolve the version-aware key map (per line, in case a JSONL
+            # mixes versions; cheap because the map is tiny).
+            if data_version is not None:
+                keys = resolve_quest_keys(data_version)
+            elif keys is None:
+                version = detect_quest_version(quest)
+                if not version:
+                    raise ValueError(
+                        "Cannot detect genshin data version from quest JSON; "
+                        "pass --data-version explicitly"
+                    )
+                keys = resolve_quest_keys(version)
+
             count += 1
             lines: list[str] = []
 
             quest_title = ""
             top_texts: list[str] = []
-            for _key, value in quest.items():
-                if isinstance(value, dict):
-                    txt = _get_text(value)
-                    if txt:
-                        top_texts.append(txt)
+            if keys["text"] == "textId":
+                quest_title = _get_text(quest.get("mainQuestTitle"), keys["text"])
+                description = _get_text(quest.get("mainQuestDesp"), keys["text"])
+                chapter = " / ".join(filter(None, (
+                    _get_text(quest.get("chapterNum"), keys["text"]),
+                    _get_text(quest.get("chapterTitle"), keys["text"]),
+                )))
+                top_texts = [quest_title, description, chapter]
+            else:
+                for _key, value in quest.items():
+                    if isinstance(value, dict):
+                        txt = _get_text(value, keys["text"])
+                        if txt:
+                            top_texts.append(txt)
 
             if top_texts:
                 quest_title = top_texts[0]
@@ -161,10 +234,10 @@ def convert_quests(jsonl_path: str, output_dir: str) -> list[str]:
 
             lines.append("")
 
-            subquests: list[dict] = quest.get(SUBQUESTS_KEY, [])
+            subquests: list[dict] = quest.get(keys["subquests"], [])
             for sq in subquests:
-                sq_title = _get_text(sq.get(SUBQ_TITLE_KEY, {}))
-                items: list[dict] = sq.get(ITEMS_KEY, [])
+                sq_title = _get_text(sq.get(keys["subq_title"], {}), keys["text"])
+                items: list[dict] = sq.get(keys["items"], [])
 
                 if not items:
                     continue
@@ -174,11 +247,11 @@ def convert_quests(jsonl_path: str, output_dir: str) -> list[str]:
                     lines.append("")
 
                 for item in items:
-                    speaker = _get_text(item.get(SPEAKER_KEY, {}))
-                    dialogs: list[dict] = item.get(DIALOGS_KEY, [])
+                    speaker = _get_text(item.get(keys["speaker"], {}), keys["text"])
+                    dialogs: list[dict] = item.get(keys["dialogs"], [])
 
                     for d in dialogs:
-                        txt = _get_text(d.get(TEXT_OBJ_KEY, {}))
+                        txt = _get_text(d.get(keys["text_obj"], {}), keys["text"])
                         if txt:
                             if speaker:
                                 lines.append(f"**{speaker}**：{txt}")
@@ -210,32 +283,28 @@ convert_jsonl_to_txt = convert_quests
 # Talks (v6.6 adapted)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_talk_speaker(item: dict) -> str:
+def _get_talk_speaker(item: dict, speaker_key: str) -> str:
     """Extract speaker name from a talk dialog item (post-replace_hashes)."""
-    # Try Type A role dict
-    for speaker_key in (TALK_A_SPEAKER, TALK_B_SPEAKER):
-        role = item.get(speaker_key)
-        if isinstance(role, dict):
-            role_type = role.get("_type", "")
-            if role_type == "TALK_ROLE_PLAYER":
-                return "旅行者"
-            # NPC — role name might be in the item as a replaced string
-            break
+    role = item.get(speaker_key)
+    if isinstance(role, dict):
+        role_type = role.get("_type", "") or role.get("type", "")
+        if role_type == "TALK_ROLE_PLAYER":
+            return "旅行者"
 
     # Check if role name was replaced from hash → string
-    role_name = item.get(TALK_A_ROLE_NAME)
-    if isinstance(role_name, str) and role_name:
-        return role_name
+    for key in ("talkRoleNameTextMapHash", TALK_A_ROLE_NAME, "EIKACHBNBMJ", "_speaker_name"):
+        role_name = item.get(key)
+        if isinstance(role_name, str) and role_name:
+            return role_name
 
     return ""
 
 
-def _get_talk_content(item: dict) -> str:
+def _get_talk_content(item: dict, content_key: str) -> str:
     """Extract dialogue content from a talk item (post-replace_hashes)."""
-    for content_key in (TALK_A_CONTENT, TALK_B_CONTENT):
-        val = item.get(content_key)
-        if isinstance(val, str) and val:
-            return val
+    val = item.get(content_key)
+    if isinstance(val, str) and val:
+        return val
     return ""
 
 
@@ -243,6 +312,8 @@ def convert_talks(jsonl_path: str, output_dir: str) -> list[str]:
     """将 talks JSONL 按 talk 类型分文件转换为 .txt。
 
     每行是一个已替换哈希的 talk，包含 _talk_type 和 _talk_file 元数据。
+    支持 6.6 Type A/B、7.0 新混淆 key 以及少量明文 key 文件；
+    Group 类文件（仅条件无对话）自动跳过。
     """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -267,25 +338,28 @@ def convert_talks(jsonl_path: str, output_dir: str) -> list[str]:
         type_dir.mkdir(parents=True, exist_ok=True)
 
         for i, talk in enumerate(talks):
-            # Detect dialog list key
-            dialog_list: list[dict] = []
-            if TALK_A_LIST in talk:
-                dialog_list = talk[TALK_A_LIST]
-            elif TALK_B_LIST in talk:
-                dialog_list = talk[TALK_B_LIST]
+            # Detect the talk format from its dialog-list key.
+            fmt = next(
+                (f for f in _TALK_FORMATS if f[0] in talk),
+                None,
+            )
+            if fmt is None:
+                continue
+            list_key, speaker_key, content_key, id_key = fmt
 
+            dialog_list: list[dict] = talk[list_key]
             if not dialog_list:
                 continue
 
-            talk_id = talk.get(TALK_A_TALK_ID, talk.get("_talk_file", f"talk_{i}"))
+            talk_id = talk.get(id_key, talk.get("_talk_file", f"talk_{i}"))
             lines: list[str] = [
                 f"# {ttype} Talk {talk_id}",
                 "",
             ]
 
             for item in dialog_list:
-                speaker = _get_talk_speaker(item)
-                content = _get_talk_content(item)
+                speaker = _get_talk_speaker(item, speaker_key)
+                content = _get_talk_content(item, content_key)
 
                 if content:
                     if speaker:
@@ -385,7 +459,7 @@ def convert_avatars(jsonl_path: str, output_dir: str) -> list[str]:
 
             content = "\n".join(lines)
             safe_name = _escape_filename(name)
-            fpath = out_dir / f"{safe_name}.txt"
+            fpath = out_dir / f"{len(written) + 1:04d}_{safe_name}.txt"
             fpath.write_text(content, encoding="utf-8")
             written.append(str(fpath))
 

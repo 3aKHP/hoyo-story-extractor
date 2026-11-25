@@ -12,9 +12,13 @@ import os
 from typing import Any
 
 # ── Obfuscated key names in Genshin CodexQuest JSON ──────────────────────
-# These are stable within a given game version but may change across versions.
+# These are stable within a given game version but change across versions.
 # They are used by the convert step, not the extract step (extract uses
 # recursive hash replacement only).
+#
+# The keys below are the v6.6 defaults, kept as module-level constants for
+# backward compatibility. New versions are registered in QUEST_KEY_MAPS and
+# selected via detect_quest_version() / resolve_quest_keys().
 TEXT_KEY = "OPKOJIEHJAE"       # text hash ID field
 SPEAKER_KEY = "KDDMHACHOGH"    # speaker name hash field
 DIALOGS_KEY = "JOIPGFEDKFO"    # list of dialog entries in an item
@@ -22,6 +26,90 @@ TEXT_OBJ_KEY = "LEMPMANEBOB"   # text object within a dialog entry
 SUBQUESTS_KEY = "IKECHKLEFFK"  # subquest list
 ITEMS_KEY = "DLLOBLBEBPM"      # dialog items within a subquest
 SUBQ_TITLE_KEY = "CGJPNLJCKKB" # subquest title object
+
+# ── Version-aware quest key maps (Genshin CodexQuest) ────────────────────
+# Historical snapshots use version-specific obfuscation; 7.2 uses plaintext
+# keys. Map each semantic role to its versioned key. Verified against real
+# CNRELWin6.6.0 / 6.7.0 / 7.0.0 / 7.2.0 CodexQuest data.
+QUEST_KEY_MAPS: dict[str, dict[str, str]] = {
+    "6.6": {
+        "text": TEXT_KEY,
+        "speaker": SPEAKER_KEY,
+        "dialogs": DIALOGS_KEY,
+        "text_obj": TEXT_OBJ_KEY,
+        "subquests": SUBQUESTS_KEY,
+        "items": ITEMS_KEY,
+        "subq_title": SUBQ_TITLE_KEY,
+    },
+    "6.7": {
+        "text": "LOFLLCHCMCG",       # text hash inside text objects
+        "speaker": "AHENKCGKNJE",    # speaker text object on an item
+        "dialogs": "KINALGAHPOK",    # dialog list within an item
+        "text_obj": "DOGHPIMMLDC",   # text object within a dialog entry
+        "subquests": "HLCINEMBGEF",  # subquest list
+        "items": "IIJIPINAOOF",      # dialog items within a subquest
+        "subq_title": "KHNBHADECGO", # subquest title object
+    },
+    "7.0": {
+        "text": "BNJEGIAOKGM",       # text hash inside text objects
+        "speaker": "IILBCFJNPGA",    # speaker text object on an item
+        "dialogs": "OFKGPGLHIDJ",    # dialog list within an item
+        "text_obj": "JGPDCLOJKLC",   # text object within a dialog entry
+        "subquests": "EBNBLBEIFFJ",  # subquest list
+        "items": "PEAKPGNONFA",      # dialog items within a subquest
+        "subq_title": "OGEGCCLHIHP", # subquest title object
+    },
+    "7.2": {
+        "text": "textId",
+        "speaker": "speakerText",
+        "dialogs": "dialogs",
+        "text_obj": "text",
+        "subquests": "subQuests",
+        "items": "items",
+        "subq_title": "subQuestTitle",
+    },
+}
+
+
+def resolve_quest_keys(data_version: str) -> dict[str, str]:
+    """Return the quest key map for a Genshin data version.
+
+    Args:
+        data_version: raw data version tag ("6.6", "6.7", "7.0", ...).
+
+    Returns:
+        dict mapping semantic roles ("text", "speaker", "subquests", ...)
+        to the concrete obfuscated keys for that version.
+
+    Raises:
+        ValueError: unknown data_version.
+    """
+    keys = QUEST_KEY_MAPS.get(data_version)
+    if keys is None:
+        known = ", ".join(sorted(QUEST_KEY_MAPS))
+        raise ValueError(
+            f"Unknown genshin data version: {data_version!r}. Known: {known}"
+        )
+    return keys
+
+
+def detect_quest_version(quest: dict) -> str:
+    """Detect the Genshin data version from a parsed quest dict.
+
+    Upstream re-obfuscates CodexQuest keys per version; each version's
+    subquest-list key is unique. Probe the known maps and return the first
+    match.
+
+    Args:
+        quest: a parsed quest JSON dict (pre- or post-hash-replacement).
+
+    Returns:
+        Version tag ("6.6" / "6.7" / "7.0" / ...) or "" if no map matches.
+    """
+    for version, keys in QUEST_KEY_MAPS.items():
+        if keys["subquests"] in quest:
+            return version
+    return ""
 
 
 def replace_hashes(obj: Any, text_map: dict[str, str]) -> Any:
